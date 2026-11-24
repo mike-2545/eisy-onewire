@@ -1,0 +1,6 @@
+{
+  "_config_version": "1",
+  "_ds2409_event_flag_policy": "preserve",
+  "_ds2409_branch_read_event_flag_policy": "preserve",
+  "_ds2409_unattended_branch_access_policy": "disabled"
+}

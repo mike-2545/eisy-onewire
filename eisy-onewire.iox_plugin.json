@@ -1,0 +1,181 @@
+{
+  "$schema": "https://raw.githubusercontent.com/universaldevices/iox-vscode-plugin/main/schemas/plugin.schema.json",
+  "plugin": {
+    "name": "eisy-onewire",
+    "description": "Generic 1-Wire controller with DS18B20 and identified HIH-4000 support",
+    "publisher": "Mike",
+    "language": "python3",
+    "executableName": "plugin.py",
+    "installScript": "install.sh",
+    "documentationLink": "https://github.com/mike-2545/eisy-onewire/blob/main/README.md",
+    "licenseLink": "https://github.com/mike-2545/eisy-onewire/blob/main/LICENSE",
+    "shortPoll": 86400,
+    "longPoll": 86400,
+    "profileVersion": "3.0.6",
+    "initialLogLevel": "INFO",
+    "enableOAUTH2": false,
+    "worksOnPolisy": false,
+    "worksOnEisy": true,
+    "requiresIoXAccess": false,
+    "enableDiscovery": false,
+    "hardwareConfig": {
+      "filename": "ds9490.conf"
+    },
+    "requirements": [
+      "udi_interface==3.4.9"
+    ],
+    "nodesAreStatic": false,
+    "version": "0.3.15"
+  },
+  "editors": [
+    {
+      "id": "temperature",
+      "uom": "Fahrenheit | 17",
+      "min": -67,
+      "max": 257,
+      "step": 0.1,
+      "precision": 1
+    },
+    {
+      "id": "reading_current",
+      "uom": "Boolean | 2",
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "refresh_interval",
+      "uom": "Index | 25",
+      "min": 0,
+      "max": 300,
+      "step": 1
+    },
+    {
+      "id": "temperature_unit",
+      "uom": "Index | 25",
+      "min": 0,
+      "max": 1,
+      "step": 1
+    },
+    {
+      "id": "decimal_precision",
+      "uom": "Index | 25",
+      "min": 0,
+      "max": 3,
+      "step": 1
+    },
+    {
+      "id": "relative_humidity",
+      "uom": "Percent | 51",
+      "min": 0,
+      "max": 100,
+      "step": 0.1,
+      "precision": 1
+    }
+  ],
+  "nodedefs": [
+    {
+      "id": "onewire_controller",
+      "name": "1-Wire Controller",
+      "icon": "GenericCtl",
+      "properties": [
+        {
+          "id": "ST",
+          "name": "Adapter Accessible",
+          "editor": {"idref": "reading_current"},
+          "is_settable": false
+        },
+        {
+          "id": "GV0",
+          "name": "Automatic Refresh Enabled",
+          "editor": {"idref": "reading_current"},
+          "is_settable": false
+        },
+        {
+          "id": "GV1",
+          "name": "Temperature Unit",
+          "editor": {"idref": "temperature_unit"},
+          "is_settable": false
+        },
+        {
+          "id": "GV2",
+          "name": "Temperature Decimal Places",
+          "editor": {"idref": "decimal_precision"},
+          "is_settable": false
+        }
+      ],
+      "commands": {
+        "accepts": [
+          {"id": "DISCOVER", "name": "Discover Devices"},
+          {"id": "DS2409_STATUS", "name": "Read DS2409 Status"},
+          {"id": "AUTO_REFRESH_ENABLE", "name": "Automatic Refresh Enable"},
+          {"id": "AUTO_REFRESH_DISABLE", "name": "Automatic Refresh Disable"},
+          {"id": "USE_FAHRENHEIT", "name": "Use Fahrenheit"},
+          {"id": "USE_CELSIUS", "name": "Use Celsius"},
+          {"id": "PRECISION_0", "name": "0 Decimal Places"},
+          {"id": "PRECISION_1", "name": "1 Decimal Place"},
+          {"id": "PRECISION_2", "name": "2 Decimal Places"},
+          {"id": "PRECISION_3", "name": "3 Decimal Places"}
+        ],
+        "sends": []
+      }
+    },
+    {
+      "id": "ds18b20",
+      "name": "1-Wire Temperature Sensor",
+      "icon": "Temperature",
+      "properties": [
+        {
+          "id": "ST",
+          "name": "Temperature",
+          "editor": {"idref": "temperature"},
+          "is_settable": false
+        },
+        {
+          "id": "GV0",
+          "name": "Current Reading Valid",
+          "editor": {"idref": "reading_current"},
+          "is_settable": false
+        },
+        {
+          "id": "GV1",
+          "name": "Desired Refresh Interval",
+          "editor": {"idref": "refresh_interval"},
+          "is_settable": false
+        }
+      ],
+      "commands": {
+        "accepts": [
+          {"id": "REFRESH", "name": "Refresh Temperature"},
+          {"id": "REFRESH_OFF", "name": "Refresh Off"},
+          {"id": "REFRESH_30", "name": "Refresh 30 sec"},
+          {"id": "REFRESH_60", "name": "Refresh 60 sec"},
+          {"id": "REFRESH_120", "name": "Refresh 120 sec"},
+          {"id": "REFRESH_300", "name": "Refresh 300 sec"}
+        ],
+        "sends": []
+      }
+    },
+    {
+      "id": "ds2438_hih4000",
+      "name": "1-Wire Temperature and Humidity Sensor",
+      "icon": "Temperature",
+      "properties": [
+        {"id": "ST", "name": "Temperature", "editor": {"idref": "temperature"}, "is_settable": false},
+        {"id": "GV0", "name": "Current Reading Valid", "editor": {"idref": "reading_current"}, "is_settable": false},
+        {"id": "GV1", "name": "Desired Refresh Interval", "editor": {"idref": "refresh_interval"}, "is_settable": false},
+        {"id": "GV2", "name": "Relative Humidity", "editor": {"idref": "relative_humidity"}, "is_settable": false}
+      ],
+      "commands": {
+        "accepts": [
+          {"id": "REFRESH", "name": "Refresh Temperature and Humidity"},
+          {"id": "REFRESH_OFF", "name": "Refresh Off"},
+          {"id": "REFRESH_30", "name": "Refresh 30 sec"},
+          {"id": "REFRESH_60", "name": "Refresh 60 sec"},
+          {"id": "REFRESH_120", "name": "Refresh 120 sec"},
+          {"id": "REFRESH_300", "name": "Refresh 300 sec"}
+        ],
+        "sends": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eisy-onewire"
+version = "0.3.15"
+description = "Generic 1-Wire controller with DS18B20 and identified HIH-4000 support"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Mike" }]
+license = { text = "MIT" }
+dependencies = ["udi_interface==3.4.9"]
+
+[project.urls]
+Homepage = "https://github.com/mike-2545/eisy-onewire"
+Documentation = "https://github.com/mike-2545/eisy-onewire/blob/main/README.md"
+Issues = "https://github.com/mike-2545/eisy-onewire/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

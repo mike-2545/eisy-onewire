@@ -1,0 +1,34 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Resolve the pinned platform interface
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: python -m pip install --requirement requirements.txt
+      - name: Import the pinned platform interface
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: python -c "import udi_interface"
+      - name: Run mocked unit tests
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
