@@ -70,7 +70,8 @@ class HardwareConfigTests(unittest.TestCase):
         )
         controller, node, humidity_node, analog_node, solar_node = self.metadata["nodedefs"]
         self.assertEqual(
-            [item["id"] for item in controller["properties"]], ["ST", "GV0", "GV1", "GV2"]
+            [item["id"] for item in controller["properties"]],
+            ["ST", "GV0", "GV1", "GV2", "GV3"],
         )
         self.assertEqual(node["id"], "ds18b20")
         self.assertEqual(

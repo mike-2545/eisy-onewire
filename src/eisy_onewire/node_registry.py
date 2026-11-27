@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .adapter_exclusion import AdapterAccessLock
+from .adapter_binding import AdapterIdentityBinding
+from .adapter_recovery import (
+    ADAPTER_RECOVERY_CONFIGURATION_KEY,
+    ADAPTER_RECOVERY_NOTICE_KEY,
+    AdapterRecoveryConfigurationError,
+    AdapterRecoveryPolicy,
+    AdapterRecoveryWorker,
+)
 from .automatic_refresh import AutomaticRefreshScheduler, RefreshTarget
 from .discovery_inventory import (
     DS18B20_FAMILY,
@@ -82,6 +90,7 @@ from .presentation_worker import (
     PresentationIntent,
     PresentationIntentKind,
 )
+from .usb_detector import UsbDeviceDescriptor, enumerate_ds9490
 
 
 CONFIG_NOTICE_KEY = "onewire_sensor_configuration"
@@ -94,6 +103,7 @@ DS2438_CACHE_NOTICE_KEY = "ds2438_measurement_cache"
 DS2438_APPLICATION_NOTICE_KEY = "ds2438_application_parameters"
 DS2438_ANALOG_CACHE_NOTICE_KEY = "ds2438_analog_measurement_cache"
 DS2438_TRANSITION_NOTICE_KEY = "ds2438_application_transition"
+ADAPTER_BINDING_NOTICE_KEY = "ds9490_adapter_identity"
 
 
 class Logger(Protocol):
@@ -149,6 +159,11 @@ class OneWireNodeRegistry:
         presentation_worker_factory: Callable[
             [Logger, Callable[[PresentationIntent], None]], PresentationCommandWorker
         ] = PresentationCommandWorker,
+        adapter_binding: AdapterIdentityBinding | None = None,
+        adapter_recovery_worker_factory: Callable[..., AdapterRecoveryWorker] = (
+            AdapterRecoveryWorker
+        ),
+        adapter_enumerator: Callable[[], tuple[UsbDeviceDescriptor, ...]] | None = None,
     ) -> None:
         self._interface = interface
         self._logger = logger
@@ -164,6 +179,12 @@ class OneWireNodeRegistry:
                 Ds2438Application.HIH4000, ds2438_sensor_class
             )
         self._adapter_lock = adapter_lock_factory()
+        self._adapter_binding = adapter_binding
+        if adapter_binding is not None:
+            set_callback = getattr(adapter_binding, "set_invalidation_callback", None)
+            if callable(set_callback):
+                set_callback(self._handle_adapter_binding_invalidation)
+        self._adapter_enumerator = adapter_enumerator or _enumerate_adapter_descriptors
         self._inventory_evidence_path = inventory_evidence_path
         self._presentation_profile_updater = presentation_profile_updater
         if inventory_evidence_path is not None:
@@ -178,6 +199,7 @@ class OneWireNodeRegistry:
         self._state_lock = threading.RLock()
         self._profile_ready = False
         self._adapter_accessible = False
+        self._descriptor_accessible = False
         self._configured: tuple[ConfiguredDs18b20, ...] | None = None
         self._configured_ds2438: tuple[ConfiguredDs2438, ...] | None = None
         self._friendly_name_overrides: dict[bytes, FriendlyNameOverride] = {}
@@ -200,6 +222,19 @@ class OneWireNodeRegistry:
         self._event_flags_cleared: tuple[EventFlagAcknowledgement, ...] = ()
         self._presentation_worker = presentation_worker_factory(
             logger, self._process_temperature_presentation_intent
+        )
+        self._adapter_recovery_policy = AdapterRecoveryPolicy()
+        self._adapter_recovery_policy_valid = True
+        self._adapter_recovery_policy_loaded = False
+        self._startup_recovery_triggered = False
+        self._adapter_recovery_worker = adapter_recovery_worker_factory(
+            logger,
+            authorized=self._adapter_recovery_authorized,
+            has_accepted_identity=self._has_accepted_adapter_identity,
+            already_verified=self._adapter_binding_verified,
+            enumerate_candidates=self._adapter_enumerator,
+            verify=self._automatic_verify_adapter_identity,
+            publish=self._publish_adapter_recovery_status,
         )
 
     @property
@@ -335,6 +370,32 @@ class OneWireNodeRegistry:
                     self._configure_scheduler_locked()
                 return
             self._inventory_loaded = True
+            raw_recovery = values.get(ADAPTER_RECOVERY_CONFIGURATION_KEY)
+            try:
+                self._adapter_recovery_policy = AdapterRecoveryPolicy.from_data(
+                    raw_recovery
+                )
+            except AdapterRecoveryConfigurationError as exc:
+                self._adapter_recovery_policy = AdapterRecoveryPolicy()
+                self._adapter_recovery_policy_valid = False
+                self._adapter_recovery_policy_loaded = True
+                self._publish_adapter_recovery_status(
+                    {
+                        "status": "invalid_configuration",
+                        "detail": str(exc),
+                        "authorized": False,
+                        "identity_transactions": 0,
+                        "automatic_retries": 0,
+                    }
+                )
+            else:
+                self._adapter_recovery_policy_valid = True
+                self._adapter_recovery_policy_loaded = True
+                if raw_recovery is None:
+                    self._custom_data[ADAPTER_RECOVERY_CONFIGURATION_KEY] = (
+                        self._adapter_recovery_policy.to_data()
+                    )
+                self._publish_recovery_authorization_locked()
             self._ensure_ds2438_application_parameters_locked()
             raw_presentation = values.get(TEMPERATURE_PRESENTATION_KEY)
             try:
@@ -388,6 +449,7 @@ class OneWireNodeRegistry:
                     )
             self._report_restored_inventory_locked()
             self._reconcile_locked()
+            self._maybe_trigger_startup_recovery_locked()
 
     def activate(self, *, adapter_accessible: bool) -> None:
         """Register nodes after the correlated runtime profile acknowledgment."""
@@ -400,29 +462,44 @@ class OneWireNodeRegistry:
                 self._presentation_profile_updater(self._temperature_presentation)
             self._temperature_presentation_consistent = True
             self._profile_ready = True
-            self._adapter_accessible = adapter_accessible
+            self._descriptor_accessible = adapter_accessible
+            # A descriptor/open probe is not durable identity evidence.  Production
+            # passes a binding and remains disarmed until explicit verification.
+            self._adapter_accessible = (
+                adapter_accessible if self._adapter_binding is None else False
+            )
             self._presentation_worker.start()
+            self._adapter_recovery_worker.start()
             if not self._scheduler_started:
                 self._scheduler.start()
                 self._scheduler_started = True
             controller = self._controller_class(
                 self._interface,
-                adapter_accessible=adapter_accessible,
+                adapter_accessible=self._adapter_accessible,
                 discover=self.discover_devices,
                 read_ds2409_status=self.read_ds2409_status,
+                verify_adapter_identity=self.verify_adapter_identity,
                 automatic_refresh_enabled=(
                     self._refresh_configuration.master_enabled
                     if self._refresh_configuration_valid
                     else False
                 ),
                 set_automatic_refresh=self.set_automatic_refresh,
+                adapter_recovery_enabled=self._adapter_recovery_authorized(),
+                set_adapter_recovery=self.set_adapter_recovery,
                 temperature_presentation=self._temperature_presentation,
                 set_temperature_unit=self.set_temperature_unit,
                 set_temperature_precision=self.set_temperature_precision,
             )
             self._interface.addNode(controller, rename=False)
             self._registered[DEFAULT_CONTROLLER_ADDRESS] = controller
+            if self._adapter_binding is not None:
+                self._adapter_binding_failed(
+                    "plugin restart invalidated the live adapter binding; descriptor "
+                    "location is not identity proof"
+                )
             self._reconcile_locked()
+            self._maybe_trigger_startup_recovery_locked()
 
     def _reconcile_locked(self) -> None:
         if not self._profile_ready:
@@ -749,6 +826,40 @@ class OneWireNodeRegistry:
             self._configure_scheduler_locked()
             return True
 
+    def set_adapter_recovery(self, enabled: bool) -> bool:
+        """Persist explicit recovery authorization without accepting identity."""
+
+        with self._state_lock:
+            if not isinstance(enabled, bool):
+                return False
+            proposed = AdapterRecoveryPolicy(enabled)
+            try:
+                if proposed != self._adapter_recovery_policy:
+                    self._custom_data[ADAPTER_RECOVERY_CONFIGURATION_KEY] = (
+                        proposed.to_data()
+                    )
+            except Exception as exc:
+                self._publish_adapter_recovery_status(
+                    {
+                        "status": "persistence_failed",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                        "authorized": self._adapter_recovery_authorized(),
+                        "identity_transactions": 0,
+                        "automatic_retries": 0,
+                    }
+                )
+                return False
+            self._adapter_recovery_policy = proposed
+            self._adapter_recovery_policy_valid = True
+            controller = self._registered.get(DEFAULT_CONTROLLER_ADDRESS)
+            update = getattr(controller, "set_adapter_recovery_enabled", None)
+            if callable(update):
+                update(enabled)
+            self._publish_recovery_authorization_locked()
+            if enabled and self._profile_ready and not self._adapter_accessible:
+                self._adapter_recovery_worker.trigger("policy_enabled")
+            return True
+
     def set_refresh_interval(self, rom: bytes, seconds: int) -> bool:
         """Persist one inventory-backed desired interval without USB access."""
 
@@ -1057,13 +1168,203 @@ class OneWireNodeRegistry:
         """Quiesce every worker before the platform interface is stopped."""
 
         presentation_error: Exception | None = None
+        recovery_error: Exception | None = None
+        try:
+            self._adapter_recovery_worker.stop()
+        except Exception as exc:
+            recovery_error = exc
         try:
             self._presentation_worker.stop()
         except Exception as exc:
             presentation_error = exc
         self._scheduler.stop()
+        if self._adapter_binding is not None:
+            if not self._adapter_lock.acquire(blocking=True):
+                raise RuntimeError("could not quiesce adapter binding during shutdown")
+            try:
+                self._adapter_binding.close()
+            finally:
+                self._adapter_lock.release()
         if presentation_error is not None:
             raise presentation_error
+        if recovery_error is not None:
+            raise recovery_error
+
+    def verify_adapter_identity(self) -> bool:
+        """Explicitly bind every ordinary operation to the accepted adapter ROM."""
+
+        return self._verify_adapter_identity("manual")
+
+    def _automatic_verify_adapter_identity(self, event: str) -> bool:
+        """Worker entry point; authorization is rechecked immediately."""
+
+        if not self._adapter_recovery_authorized():
+            return False
+        return self._verify_adapter_identity(f"automatic:{event}")
+
+    def _verify_adapter_identity(self, source: str) -> bool:
+        """Verify once under the shared lock and retain that exact handle."""
+
+        binding = self._adapter_binding
+        if binding is None:
+            return False
+        with self._state_lock:
+            if not self._profile_ready:
+                return self._adapter_binding_failed("runtime profile is not ready")
+            if not self._inventory_loaded:
+                return self._adapter_binding_failed(
+                    "persistent discovery inventory is not ready"
+                )
+            identities = tuple(
+                item.rom
+                for item in self._inventory.devices
+                if item.family_code == DS9490_ID_FAMILY and not item.path
+            )
+            if len(identities) != 1:
+                return self._adapter_binding_failed(
+                    "accepted inventory must contain exactly one root family-0x81 "
+                    "adapter identity"
+                )
+            expected = identities[0]
+        if not self._adapter_lock.acquire(blocking=False):
+            return self._adapter_binding_failed(
+                "1-Wire adapter is busy; identity was not verified"
+            )
+        try:
+            evidence = binding.verify(expected)
+        except Exception as exc:
+            self._logger.error("DS9490 identity verification failed: %s", exc)
+            with self._state_lock:
+                self._adapter_accessible = False
+                self._update_adapter_status_locked(False)
+                self._configure_scheduler_locked()
+            return self._adapter_binding_failed(
+                str(exc), error_type=type(exc).__name__
+            )
+        finally:
+            self._adapter_lock.release()
+        with self._state_lock:
+            self._adapter_accessible = True
+            self._update_adapter_status_locked(True)
+            self._configure_scheduler_locked()
+            descriptor = evidence.descriptor
+            self._interface.Notices[ADAPTER_BINDING_NOTICE_KEY] = json.dumps(
+                {
+                    "status": "verified",
+                    "adapter_identity_rom": evidence.identity_rom.hex().upper(),
+                    "matching_root_devices": evidence.root_device_count,
+                    "location_evidence": {
+                        "bus_number": descriptor.bus_number,
+                        "device_address": descriptor.device_address,
+                        "port_path": list(descriptor.port_path)
+                        if descriptor.port_path
+                        else None,
+                    },
+                    "operator_action_after_restart_or_disconnect": (
+                        "automatic recovery is authorized"
+                        if self._adapter_recovery_authorized()
+                        else "run Verify Adapter Identity again"
+                    ),
+                    "verification_source": source,
+                    "automatic_retries": 0,
+                },
+                sort_keys=True,
+            )
+        return True
+
+    def _update_adapter_status_locked(self, accessible: bool) -> None:
+        controller = self._registered.get(DEFAULT_CONTROLLER_ADDRESS)
+        update = getattr(controller, "set_adapter_accessible", None)
+        if callable(update):
+            update(accessible)
+
+    def _adapter_binding_failed(
+        self, detail: str, *, error_type: str | None = None
+    ) -> bool:
+        self._interface.Notices[ADAPTER_BINDING_NOTICE_KEY] = json.dumps(
+            {
+                "status": "unverified",
+                "detail": detail,
+                "error_type": error_type,
+                "ordinary_hardware_operations_blocked": True,
+                "operator_action": "run Verify Adapter Identity",
+                "automatic_retries": 0,
+            },
+            sort_keys=True,
+        )
+        return False
+
+    def _handle_adapter_binding_invalidation(self, detail: str) -> None:
+        """Disarm promptly when the retained native handle reports disconnect."""
+
+        with self._state_lock:
+            self._adapter_accessible = False
+            self._update_adapter_status_locked(False)
+            if self._profile_ready:
+                self._configure_scheduler_locked()
+            self._adapter_binding_failed(detail, error_type="AdapterNotFoundError")
+            if self._adapter_recovery_authorized():
+                self._adapter_recovery_worker.trigger("retained_handle_invalidated")
+
+    def _adapter_recovery_authorized(self) -> bool:
+        with self._state_lock:
+            return (
+                self._adapter_recovery_policy_valid
+                and self._adapter_recovery_policy.enabled
+            )
+
+    def _has_accepted_adapter_identity(self) -> bool:
+        with self._state_lock:
+            if not self._inventory_loaded:
+                return False
+            identities = tuple(
+                item.rom
+                for item in self._inventory.devices
+                if item.family_code == DS9490_ID_FAMILY and not item.path
+            )
+            return len(identities) == 1
+
+    def _adapter_binding_verified(self) -> bool:
+        binding = self._adapter_binding
+        return bool(binding is not None and binding.verified)
+
+    def _publish_adapter_recovery_status(self, payload: dict[str, object]) -> None:
+        rendered = json.dumps(payload, sort_keys=True)
+        self._interface.Notices[ADAPTER_RECOVERY_NOTICE_KEY] = rendered
+        self._logger.info("Automatic adapter recovery status: %s", rendered)
+
+    def _publish_recovery_authorization_locked(self) -> None:
+        enabled = self._adapter_recovery_authorized()
+        self._publish_adapter_recovery_status(
+            {
+                "status": "authorized" if enabled else "disabled",
+                "authorized": enabled,
+                "identity_transactions": 0,
+                "automatic_retries": 0,
+                "identity_replacement_allowed": False,
+                "automatic_topology_discovery": False,
+            }
+        )
+
+    def _maybe_trigger_startup_recovery_locked(self) -> None:
+        if (
+            self._startup_recovery_triggered
+            or not self._profile_ready
+            or not self._adapter_recovery_policy_loaded
+        ):
+            return
+        self._startup_recovery_triggered = True
+        if not self._adapter_recovery_policy_valid:
+            return
+        if self._adapter_recovery_authorized():
+            self._adapter_recovery_worker.trigger("plugin_startup")
+        else:
+            self._publish_recovery_authorization_locked()
+
+    def wait_for_adapter_recovery(self, timeout_seconds: float = 2.0) -> bool:
+        """Wait for recovery work; intended for deterministic verification."""
+
+        return self._adapter_recovery_worker.wait_idle(timeout_seconds)
 
     def wait_for_presentation_commands(self, timeout_seconds: float = 2.0) -> bool:
         """Wait for queued presentation work; intended for deterministic verification."""
@@ -1165,7 +1466,7 @@ class OneWireNodeRegistry:
             ),
             armed=(
                 self._refresh_configuration.scheduler_armed
-                if self._refresh_configuration_valid
+                if self._refresh_configuration_valid and self._adapter_accessible
                 else False
             ),
             adapter_accessible=self._adapter_accessible,
@@ -1759,6 +2060,16 @@ class OneWireNodeRegistry:
             sort_keys=True,
         )
         self._logger.error("Temperature presentation consistency unknown: %s", detail)
+
+
+def _enumerate_adapter_descriptors() -> tuple[UsbDeviceDescriptor, ...]:
+    result = enumerate_ds9490()
+    if result.error_code is not None:
+        raise RuntimeError(
+            f"descriptor enumeration failed with libusb error {result.error_code}: "
+            f"{result.detail or 'unknown error'}"
+        )
+    return result.descriptors
 
 
 def _sensor_address(item: KnownDevice) -> str:

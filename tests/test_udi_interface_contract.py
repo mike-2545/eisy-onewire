@@ -46,11 +46,17 @@ from eisy_onewire.inventory_evidence import (
     validate_ds2438_target,
 )
 from eisy_onewire.controller_node import (
+    ADAPTER_RECOVERY_ENABLE_COMMAND,
     AUTOMATIC_REFRESH_ENABLE_COMMAND,
     DISCOVER_COMMAND,
     DS2409_STATUS_COMMAND,
+    VERIFY_ADAPTER_COMMAND,
     create_controller_node_class,
     USE_CELSIUS_COMMAND,
+)
+from eisy_onewire.adapter_recovery import (
+    ADAPTER_RECOVERY_CONFIGURATION_KEY,
+    AdapterRecoveryPolicy,
 )
 from eisy_onewire.refresh_configuration import (
     REFRESH_CONFIGURATION_KEY,
@@ -762,6 +768,20 @@ class UdiInterfaceContractTests(unittest.TestCase):
 
         self.assertEqual(calls, ["status"])
 
+    def test_actual_runCmd_routes_explicit_adapter_identity_verification(self) -> None:
+        calls = []
+        node = create_controller_node_class(udi_interface.Node)(
+            RealNodePolyglotHarness(),
+            adapter_accessible=False,
+            discover=lambda: False,
+            read_ds2409_status=lambda: False,
+            verify_adapter_identity=lambda: calls.append("verify") or True,
+        )
+
+        node.runCmd({"cmd": VERIFY_ADAPTER_COMMAND})
+
+        self.assertEqual(calls, ["verify"])
+
     def test_actual_runCmd_routes_master_enable_without_polling(self) -> None:
         calls = []
         node_class = create_controller_node_class(udi_interface.Node)
@@ -777,6 +797,21 @@ class UdiInterfaceContractTests(unittest.TestCase):
 
         self.assertEqual(calls, [True])
         self.assertEqual(node.getDriver("GV0"), 1)
+
+    def test_actual_runCmd_routes_adapter_recovery_authorization_without_usb(self) -> None:
+        calls = []
+        node = create_controller_node_class(udi_interface.Node)(
+            RealNodePolyglotHarness(),
+            adapter_accessible=False,
+            discover=lambda: self.fail("recovery policy must not discover"),
+            read_ds2409_status=lambda: self.fail("recovery policy must not access USB"),
+            set_adapter_recovery=lambda enabled: calls.append(enabled) or True,
+        )
+
+        node.runCmd({"cmd": ADAPTER_RECOVERY_ENABLE_COMMAND})
+
+        self.assertEqual(calls, [True])
+        self.assertEqual(node.getDriver("GV3"), 1)
 
     def test_actual_runCmd_routes_unit_selection_without_usb_activity(self) -> None:
         calls = []
@@ -958,6 +993,38 @@ class UdiInterfaceContractTests(unittest.TestCase):
         self.assertEqual(saved["unrelated"], 7)
         self.assertEqual(
             TemperaturePresentation.from_data(saved[TEMPERATURE_PRESENTATION_KEY]),
+            selected,
+        )
+
+    def test_actual_customdata_recovery_policy_assignment_is_atomic(self) -> None:
+        class CustomHarness:
+            def __init__(self) -> None:
+                self.sent = []
+
+            def send(self, message, channel) -> None:
+                self.sent.append((deepcopy(message), channel))
+
+        harness = CustomHarness()
+        custom_data = udi_interface.Custom(harness, "customdata")
+        custom_data.load(
+            {
+                INVENTORY_KEY: {"preserved": True},
+                REFRESH_CONFIGURATION_KEY: {"preserved": True},
+                "unrelated": 7,
+            }
+        )
+        selected = AdapterRecoveryPolicy(True)
+
+        custom_data[ADAPTER_RECOVERY_CONFIGURATION_KEY] = selected.to_data()
+
+        saved = harness.sent[-1][0]["set"][0]["value"]
+        self.assertEqual(saved[INVENTORY_KEY], {"preserved": True})
+        self.assertEqual(saved[REFRESH_CONFIGURATION_KEY], {"preserved": True})
+        self.assertEqual(saved["unrelated"], 7)
+        self.assertEqual(
+            AdapterRecoveryPolicy.from_data(
+                saved[ADAPTER_RECOVERY_CONFIGURATION_KEY]
+            ),
             selected,
         )
 

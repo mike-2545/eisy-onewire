@@ -124,6 +124,11 @@ _RUNTIME_PROFILE: dict[str, Any] = {
                     "editor": "decimal_precision",
                     "name": "Temperature Decimal Places",
                 },
+                {
+                    "id": "GV3",
+                    "editor": "reading_current",
+                    "name": "Automatic Adapter Recovery Enabled",
+                },
             ],
             "cmds": {
                 "sends": [],
@@ -139,6 +144,11 @@ _RUNTIME_PROFILE: dict[str, Any] = {
                         "name": "Read DS2409 Status",
                     },
                     {
+                        "id": "VERIFY_ADAPTER",
+                        "native": "false",
+                        "name": "Verify Adapter Identity",
+                    },
+                    {
                         "id": "AUTO_REFRESH_ENABLE",
                         "native": "false",
                         "name": "Automatic Refresh Enable",
@@ -147,6 +157,16 @@ _RUNTIME_PROFILE: dict[str, Any] = {
                         "id": "AUTO_REFRESH_DISABLE",
                         "native": "false",
                         "name": "Automatic Refresh Disable",
+                    },
+                    {
+                        "id": "ADAPTER_RECOVERY_ENABLE",
+                        "native": "false",
+                        "name": "Automatic Adapter Recovery Enable",
+                    },
+                    {
+                        "id": "ADAPTER_RECOVERY_DISABLE",
+                        "native": "false",
+                        "name": "Automatic Adapter Recovery Disable",
                     },
                     {"id": "USE_FAHRENHEIT", "native": "false", "name": "Use Fahrenheit"},
                     {"id": "USE_CELSIUS", "native": "false", "name": "Use Celsius"},

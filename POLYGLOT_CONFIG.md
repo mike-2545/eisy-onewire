@@ -1,6 +1,6 @@
 # eisy-onewire configuration reference
 
-Version 0.3.17 uses the supported eisy-ui plugin configuration and IoX command
+Version 0.3.19 uses the supported eisy-ui plugin configuration and IoX command
 interfaces. Most users can discover sensors, rename nodes, select intervals,
 and change temperature presentation without typing a ROM.
 
@@ -17,6 +17,26 @@ _ds2409_unattended_branch_access_policy=disabled
 
 Automatic Refresh and every sensor interval also start Off. No discovery or
 sensor measurement is initiated by saving configuration.
+
+## Adapter identity verification and recovery
+
+The startup open/close detector proves USB access, not identity. Manual
+**Verify Adapter Identity** performs one bounded root Search ROM, requires the
+accepted CRC-valid family-`0x81` ROM, and retains that exact libusb handle.
+USB bus/address/port values are location evidence, never accepted identity.
+
+The controller also provides **Automatic Adapter Recovery Enable/Disable** and
+displays the persisted Boolean selection. Default: disabled. Enabling it
+authorizes one automatic identity transaction per bounded startup or supported
+retained-handle invalidation event. It does not authorize a different adapter,
+topology discovery, branch switching, sensor measurement, retry, or identity
+replacement. Exactly one matching descriptor and an already accepted identity
+are required. Automatic Refresh is independent: recovery only arms scheduling
+when its separately persisted master preference is already enabled.
+
+This policy is stored atomically in plugin customdata as
+`adapter_identity_recovery`; users must not edit that record. A malformed
+record fails safely to disabled and raises a Notice without granting access.
 
 ## Friendly names
 

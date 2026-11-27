@@ -11,7 +11,7 @@
     "licenseLink": "https://github.com/mike-2545/eisy-onewire/blob/main/LICENSE",
     "shortPoll": 86400,
     "longPoll": 86400,
-    "profileVersion": "3.0.6",
+    "profileVersion": "3.0.7",
     "initialLogLevel": "INFO",
     "enableOAUTH2": false,
     "worksOnPolisy": false,
@@ -25,7 +25,7 @@
       "udi_interface==3.4.9"
     ],
     "nodesAreStatic": false,
-    "version": "0.3.17"
+    "version": "0.3.19"
   },
   "editors": [
     {
@@ -117,14 +117,23 @@
           "name": "Temperature Decimal Places",
           "editor": {"idref": "decimal_precision"},
           "is_settable": false
+        },
+        {
+          "id": "GV3",
+          "name": "Automatic Adapter Recovery Enabled",
+          "editor": {"idref": "reading_current"},
+          "is_settable": false
         }
       ],
       "commands": {
         "accepts": [
           {"id": "DISCOVER", "name": "Discover Devices"},
           {"id": "DS2409_STATUS", "name": "Read DS2409 Status"},
+          {"id": "VERIFY_ADAPTER", "name": "Verify Adapter Identity"},
           {"id": "AUTO_REFRESH_ENABLE", "name": "Automatic Refresh Enable"},
           {"id": "AUTO_REFRESH_DISABLE", "name": "Automatic Refresh Disable"},
+          {"id": "ADAPTER_RECOVERY_ENABLE", "name": "Automatic Adapter Recovery Enable"},
+          {"id": "ADAPTER_RECOVERY_DISABLE", "name": "Automatic Adapter Recovery Disable"},
           {"id": "USE_FAHRENHEIT", "name": "Use Fahrenheit"},
           {"id": "USE_CELSIUS", "name": "Use Celsius"},
           {"id": "PRECISION_0", "name": "0 Decimal Places"},

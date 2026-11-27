@@ -46,6 +46,33 @@ class PluginEntrypointTests(unittest.TestCase):
         self.assertIn("requires --rom", result.stderr)
         self.assertNotIn("native DS2490 transport", result.stderr)
 
+    def test_every_sensor_or_status_diagnostic_requires_adapter_identity(self) -> None:
+        commands = (
+            ["adapter-status"],
+            ["search-rom"],
+            ["temperature-power", "--rom", "280102030405069E"],
+            ["temperature-read", "--rom", "280102030405069E"],
+            [
+                "ds2438-read",
+                "--rom", "26010203040506D6",
+                "--coupler-rom", "1F01020304050694",
+                "--branch", "main",
+            ],
+        )
+        for arguments in commands:
+            with self.subTest(command=arguments[0]):
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "diagnostic.py"), *arguments],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("adapter-rom", result.stderr)
+                self.assertNotIn("native DS2490 transport", result.stderr)
+
     def test_runtime_dependency_is_declared_and_installed_per_user(self) -> None:
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         metadata = json.loads(
@@ -198,7 +225,7 @@ class PluginEntrypointTests(unittest.TestCase):
                             if [item["id"] for item in node["cmds"]["accepts"]] != ["REFRESH", "REFRESH_OFF", "REFRESH_30", "REFRESH_60", "REFRESH_120", "REFRESH_300"]:
                                 raise AssertionError("sensor commands must be fixed and parameterless")
                             controller = profile["nodedefs"][0]
-                            if [item["id"] for item in controller["cmds"]["accepts"]] != ["DISCOVER", "DS2409_STATUS", "AUTO_REFRESH_ENABLE", "AUTO_REFRESH_DISABLE", "USE_FAHRENHEIT", "USE_CELSIUS", "PRECISION_0", "PRECISION_1", "PRECISION_2", "PRECISION_3"]:
+                            if [item["id"] for item in controller["cmds"]["accepts"]] != ["DISCOVER", "DS2409_STATUS", "VERIFY_ADAPTER", "AUTO_REFRESH_ENABLE", "AUTO_REFRESH_DISABLE", "ADAPTER_RECOVERY_ENABLE", "ADAPTER_RECOVERY_DISABLE", "USE_FAHRENHEIT", "USE_CELSIUS", "PRECISION_0", "PRECISION_1", "PRECISION_2", "PRECISION_3"]:
                                 raise AssertionError("controller commands must be parameterless")
                             if "delete" in profile:
                                 raise AssertionError("profile update must be additive")
@@ -243,8 +270,10 @@ class PluginEntrypointTests(unittest.TestCase):
                     "subscribe:customdata",
                     "log",
                     "ready",
+                    "log",
                     "updateJsonProfile",
                     "addNode:onewire",
+                    "log",
                     "runForever",
                     "stop",
                 ],

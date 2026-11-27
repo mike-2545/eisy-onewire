@@ -3,6 +3,52 @@
 All notable user-facing changes are summarized here. Detailed engineering
 records are indexed in [docs/development-history.md](docs/development-history.md).
 
+## 0.3.19 — Unattended adapter identity recovery
+
+- Adds a default-off, persistent controller authorization for automatic
+  verification of an already accepted DS9490 family-`0x81` identity.
+- Performs at most one identity Search ROM per bounded startup or supported
+  retained-handle invalidation event, requires exactly one candidate and an
+  exact identity match, and retains the verified native handle.
+- Keeps Automatic Refresh intent independent from current adapter binding;
+  successful recovery resumes staggered scheduling only when the saved master
+  was already enabled.
+- Preserves manual verification, native-error invalidation, cross-process
+  exclusion, zero retries, and rejection of unknown or ambiguous adapters.
+- Documents that reconnects outside the bounded event still require manual
+  verification; no permanent hotplug event loop or multi-adapter management is
+  introduced.
+
+## 0.3.18 — Adapter enumeration and identity foundation
+
+- Enumerates every matching `04fa:2490` USB descriptor and reports the adapter
+  count plus transient bus/address and physical port-path evidence.
+- Preserves single-adapter operation while failing closed before opening a
+  device when ordinary hardware access is ambiguous.
+- Adds explicit descriptor-only enumeration and deliberately selected,
+  one-shot family-`0x81` identity diagnostics. Identity verification is never
+  automatic and does not scan DS2409 branches.
+- Removes enumeration-order/first-match selection from the shared native
+  DS2490 session factory, including scheduled and manual hardware operations.
+- Binds every ordinary operation to one explicitly verified retained libusb
+  handle whose family-`0x81` ROM matches accepted inventory. Restart or
+  disconnect disarms access until the operator verifies again.
+- Invalidates and closes that binding after any negative native retained-handle
+  operation (including the FreeBSD-observed `libusb_get_configuration()`
+  result `-11`), clears stale verified evidence, marks the controller
+  inaccessible, and disarms scheduling without treating sensor-level protocol
+  or policy failures as adapter loss.
+- Routes all packaged status, Search ROM, DS18B20, and DS2438 diagnostics
+  through the shared cross-process lock, persisted identity evidence, and the
+  same verified retained handle; legacy VID/PID-only diagnostic selection is
+  no longer possible.
+- Completes DS2438 sensor, coupler, branch, adapter, and topology preflight
+  before libusb opens, then passes that single validated target into the
+  same-handle hardware transaction.
+- Adds **Verify Adapter Identity** and actionable binding Notices while
+  preserving all existing nodes and configuration.
+- Does not add multi-adapter nodes, provisioning, scheduling, or persistence.
+
 ## 0.3.17 — DS2438 analog voltage and solar irradiance
 
 - Added explicit `analog_voltage` and `solar_irradiance` DS2438 applications.

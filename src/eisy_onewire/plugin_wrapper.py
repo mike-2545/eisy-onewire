@@ -43,6 +43,7 @@ def detection_report(result: DetectionResult) -> dict[str, Any]:
         "status": result.status.value,
         "detail": result.detail,
         "error_code": result.error_code,
+        "matching_adapter_count": result.matching_adapter_count,
         "safety": "probe performs at most an immediate open/close; no interface claimed or transfer sent",
     }
     if descriptor is not None:
@@ -51,7 +52,17 @@ def detection_report(result: DetectionResult) -> dict[str, Any]:
             "product_id": f"{descriptor.product_id:04x}",
             "bus_number": descriptor.bus_number,
             "device_address": descriptor.device_address,
+            "port_path": list(descriptor.port_path) if descriptor.port_path else None,
         }
+    if result.descriptors:
+        report["matching_adapters"] = [
+            {
+                "bus_number": item.bus_number,
+                "device_address": item.device_address,
+                "port_path": list(item.port_path) if item.port_path else None,
+            }
+            for item in result.descriptors
+        ]
     return report
 
 

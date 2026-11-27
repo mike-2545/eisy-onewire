@@ -6,10 +6,17 @@ The **1-Wire Controller** represents one DS9490 adapter. Supported sensors are
 children with stable addresses derived from their complete CRC-valid ROMs.
 Changing a friendly name never changes that identity.
 
+Sensor operations remain blocked until the connected adapter's CRC-valid
+family-`0x81` ROM matches accepted inventory. Run **Verify Adapter Identity**
+manually, or explicitly enable **Automatic Adapter Recovery**. Automatic
+recovery is disabled by default and authorizes at most one bounded root-bus
+identity Search ROM per recovery event. It cannot accept a new identity.
+
 The controller shows:
 
 - **Adapter Accessible**;
 - **Automatic Refresh Enabled**;
+- **Automatic Adapter Recovery**;
 - **Temperature Unit**; and
 - **Temperature Decimal Places**.
 
@@ -76,6 +83,38 @@ GV0 false and retain the last valid ST/GV2 as stale.
 Branch sensors also require `_ds2409_unattended_branch_access_policy`. This is
 independent of both manual policies. Root-bus DS18B20 scheduling was live-tested.
 Unattended DS2438 branch measurement passed controlled v0.3.16 acceptance.
+
+## Automatic adapter recovery
+
+Automatic Refresh expresses the operator's scheduling intent. Adapter
+Accessible reports whether this process currently owns a live retained handle
+whose family-`0x81` ROM exactly matches accepted inventory. Automatic Adapter
+Recovery is a third, independent authorization.
+
+When recovery is enabled, startup waits for bounded descriptor and permission
+readiness and makes one identity attempt only if exactly one DS9490 is present.
+A successful match retains that same native handle. Scheduling resumes only if
+Automatic Refresh was already enabled; staggered due times and per-sensor
+intervals remain unchanged. If Automatic Refresh was disabled, verification
+does not enable it.
+
+The same bounded recovery can follow invalidation of an already verified
+handle when the adapter returns within that event's eight-second readiness
+window. Multiple
+adapters, a mismatch, missing or invalid family-`0x81` evidence, lock or
+permission failure, and native errors fail closed with zero retry. A later
+reconnect that was not observed during the bounded window requires manual
+verification. This release intentionally does not maintain a permanent libusb
+hotplug event loop.
+
+The precise disconnect/invalidation/eight-second reconnect sequence is covered
+by automated regression tests. Controlled live acceptance demonstrated
+automatic recovery after plugin restart and a full eisy reboot; it did not
+repeat that timing-sensitive reconnect sequence.
+
+Enabling recovery authorizes root-bus signaling for identity only. It never
+runs sensor discovery, switches branches, reads a sensor, writes EEPROM, or
+replaces the accepted identity.
 
 ## Temperature presentation
 

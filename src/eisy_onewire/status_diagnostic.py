@@ -1,8 +1,8 @@
-"""Explicit, one-shot DS2490 EP1 status diagnostic.
+"""Explicit, identity-bound, one-shot DS2490 EP1 status diagnostic.
 
-The diagnostic deliberately issues no control or bulk transfers. It requires
-USB configuration 1 to be active, preserves the current alternate setting,
-claims interface 0, reads EP1 once, and releases all native resources.
+After the shared access layer verifies the accepted adapter by one bounded
+Search ROM on a retained handle, the status phase issues no control or bulk
+transfers. It claims interface 0, reads EP1 once, and releases all resources.
 """
 
 from __future__ import annotations
@@ -13,15 +13,20 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Callable, Sequence, TextIO
 
+from .adapter_binding import AdapterBindingError
 from .ds2490_transport import (
     STATUS_DATA_IN_COUNT_OFFSET,
     STATUS_FLAGS_OFFSET,
     STATUS_MINIMUM_SIZE,
     STATUS_SIZE,
-    CtypesLibUsbSessionFactory,
     Ds2490Error,
     Ds2490ProtocolError,
     UsbSessionFactory,
+)
+from .diagnostic_access import (
+    DiagnosticAccessError,
+    VerifiedDiagnosticAccess,
+    parse_adapter_identity,
 )
 from .version import PLUGIN_VERSION
 
@@ -57,8 +62,8 @@ class AdapterStatus:
 class Ds2490StatusDiagnostic:
     """Perform exactly one non-command EP1 read in a claimed session."""
 
-    def __init__(self, factory: UsbSessionFactory | None = None) -> None:
-        self._factory = factory or CtypesLibUsbSessionFactory.for_status_diagnostic()
+    def __init__(self, factory: UsbSessionFactory) -> None:
+        self._factory = factory
 
     def run(self) -> AdapterStatus:
         with self._factory.open() as session:
@@ -134,7 +139,12 @@ def diagnostic_report(status: AdapterStatus) -> dict[str, object]:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    diagnostic_factory: Callable[[], Ds2490StatusDiagnostic] = Ds2490StatusDiagnostic,
+    diagnostic_factory: Callable[[UsbSessionFactory], Ds2490StatusDiagnostic] = (
+        Ds2490StatusDiagnostic
+    ),
+    access_factory: Callable[[], VerifiedDiagnosticAccess] = (
+        VerifiedDiagnosticAccess.native
+    ),
     output: TextIO = sys.stdout,
     error_output: TextIO = sys.stderr,
 ) -> int:
@@ -142,12 +152,33 @@ def main(
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("adapter-status",))
+    parser.add_argument(
+        "--adapter-rom",
+        required=True,
+        help="accepted CRC-valid family-0x81 adapter ROM",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command != "adapter-status":  # defensive; argparse enforces this
         return 2
     try:
-        report = diagnostic_report(diagnostic_factory().run())
-    except (Ds2490Error, OSError) as exc:
+        expected = parse_adapter_identity(arguments.adapter_rom)
+        status = access_factory().run(
+            expected,
+            lambda binding, _inventory: diagnostic_factory(binding).run(),
+        )
+        report = diagnostic_report(status)
+        report["identity_verification"] = {
+            "adapter_rom": expected.hex().upper(),
+            "root_searches": 1,
+            "same_retained_handle": True,
+        }
+    except (
+        AdapterBindingError,
+        DiagnosticAccessError,
+        Ds2490Error,
+        OSError,
+        ValueError,
+    ) as exc:
         json.dump(
             {
                 "status": "error",

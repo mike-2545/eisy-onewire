@@ -4,12 +4,14 @@
 the DS9490R USB adapter directly through FreeBSD libusb, so a separate
 Raspberry Pi, OWFS server, or network bridge is not required.
 
-Version **0.3.17** is a **public beta**. Controlled live acceptance covered a
-DS9490R, multiple DS18B20 temperature sensors, a DS2409 coupler, an explicitly
-identified DS2438/Honeywell HIH-4000 humidity application, generic DS2438
-analog voltage, and a provisionally calibrated solar-voltage application.
-Review the [known limitations](#known-limitations) before enabling branch
-access or automatic refresh.
+Version **0.3.19** is a public beta. It adds explicitly authorized unattended
+recovery of an already accepted DS9490 identity while retaining the fail-closed
+adapter protections introduced in 0.3.18. Controlled live acceptance covered
+plugin restart and a full eisy reboot, automatic restoration of the accepted
+adapter binding, resumed staggered scheduling, and the existing DS18B20,
+DS2409, and configured DS2438 applications. Review the
+[known limitations](#known-limitations) before enabling branch access or
+automatic refresh.
 
 ## What it does
 
@@ -26,6 +28,8 @@ access or automatic refresh.
 - Displays temperature in Fahrenheit or Celsius with 0--3 decimal places.
 - Preserves the last valid reading as stale when a later read fails or after a
   restart.
+- Can opt in to bounded, identity-matched adapter recovery after restart or a
+  supported reconnect event without accepting a different adapter.
 
 ## Requirements
 
@@ -102,6 +106,31 @@ unattended DS2409 policy, and acknowledgment can irreversibly clear event
 latches. Keep unfamiliar sensors Off until their circuit, topology, and safety
 requirements have been reviewed.
 
+### Adapter identity recovery
+
+The controller's **Automatic Adapter Recovery** setting is disabled by
+default. Enabling it permits one bounded root-bus identity Search ROM after a
+startup or trusted-handle invalidation event. The readiness window is eight
+seconds; if the adapter is not ready within that window, use manual **Verify
+Adapter Identity**. Recovery succeeds only when
+exactly one DS9490 is present and its CRC-valid family-`0x81` ROM exactly
+matches the identity already accepted in discovery inventory. It never accepts
+a new identity, scans topology, switches a DS2409 branch, retries a failed
+identity transaction, or changes the Automatic Refresh preference.
+
+The controller separately displays **Adapter Accessible**, **Automatic
+Adapter Recovery**, and **Automatic Refresh**. Accessibility means a live
+identity-verified retained handle exists; it is not inferred from a USB
+descriptor. Keep recovery disabled where even this bounded automatic 1-Wire
+identity transaction is undesirable. Manual **Verify Adapter Identity**
+remains available.
+
+Accessibility and recovery Notices are historical records and may continue to
+show an earlier probe, refusal, or recovery attempt. Use the controller's
+current **Adapter Accessible**, **Automatic Adapter Recovery**, and
+**Automatic Refresh** values together with the newest Notice when determining
+current state.
+
 ### Temperature units and precision
 
 The controller provides Fahrenheit/Celsius and 0--3 decimal-place commands.
@@ -140,7 +169,17 @@ stale. Cached values also return as stale after plugin restart until refreshed.
 
 ## Known limitations
 
-- One DS9490 adapter per plugin instance; no adapter selector yet.
+- Normal operation remains limited to exactly one DS9490 adapter. Version
+  0.3.19 enumerates every matching descriptor, requires an exact accepted
+  family-`0x81` identity, and fails closed if selection is ambiguous; it does
+  not yet manage two adapters.
+- Automatic reconnect recovery is limited to startup and a reconnect observed
+  during the eight-second recovery window after an already verified retained
+  handle fails. Later attachment requires manual **Verify Adapter Identity**
+  because this release does not run a permanent libusb hotplug event loop. The
+  precise disconnect/invalidation/reconnect path is covered by automated
+  regression tests; live acceptance demonstrated restart and full-reboot
+  recovery, not that timing-sensitive reconnect path.
 - One DS2409 coupler level; nested couplers are not supported.
 - DS18B20 parasite-powered conversion is not supported. Sensors must be
   externally powered.

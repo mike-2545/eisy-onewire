@@ -15,6 +15,7 @@ from eisy_onewire.usb_detector import (  # noqa: E402
     LIBUSB_ERROR_ACCESS,
     _LibUsbDeviceDescriptor,
     detect_ds9490,
+    enumerate_ds9490,
 )
 
 
@@ -83,6 +84,12 @@ class FakeLibUsb:
 
     def libusb_get_device_address(self, device: int) -> int:
         return self.devices[int(device) - 1].get("device_address", 0)
+
+    def libusb_get_port_numbers(self, device: int, buffer: object, length: int) -> int:
+        path = self.devices[int(device) - 1].get("port_path", ())
+        for index, value in enumerate(path[:length]):
+            buffer[index] = value
+        return min(len(path), length)
 
     def libusb_open(self, device: int, handle_out: object) -> int:
         self.open_calls.append(int(device))
@@ -158,6 +165,34 @@ class UsbDetectorTests(unittest.TestCase):
         self.assertEqual(fake.close_calls, [1002])
         self.assertEqual(result.descriptor.usb_version, 0x0110)
         self.assertEqual(result.descriptor.max_packet_size0, 8)
+        self.assertEqual(result.matching_adapter_count, 1)
+
+    def test_descriptor_inventory_reports_zero_one_and_multiple_without_opening(self) -> None:
+        for devices, expected in (
+            ([], 0),
+            ([device(DS9490_VENDOR_ID, DS9490_PRODUCT_ID, port_path=(2, 1))], 1),
+            ([
+                device(DS9490_VENDOR_ID, DS9490_PRODUCT_ID, port_path=(2, 1)),
+                device(DS9490_VENDOR_ID, DS9490_PRODUCT_ID, port_path=(2, 2)),
+            ], 2),
+        ):
+            fake = FakeLibUsb(devices)
+            result = enumerate_ds9490(CtypesLibUsbBackend(fake))
+            self.assertEqual(result.matching_adapter_count, expected)
+            self.assertEqual(fake.open_calls, [])
+        self.assertEqual(result.descriptors[1].port_path, (2, 2))
+
+    def test_multiple_matches_fail_closed_without_enumeration_order_selection(self) -> None:
+        devices = [
+            device(DS9490_VENDOR_ID, DS9490_PRODUCT_ID, device_address=4),
+            device(DS9490_VENDOR_ID, DS9490_PRODUCT_ID, device_address=5),
+        ]
+        for order in (devices, list(reversed(devices))):
+            fake = FakeLibUsb(order)
+            result = detect_ds9490(CtypesLibUsbBackend(fake))
+            self.assertEqual(result.status, DetectionStatus.AMBIGUOUS)
+            self.assertEqual(result.matching_adapter_count, 2)
+            self.assertEqual(fake.open_calls, [])
 
     def test_unexpected_open_error_is_distinct(self) -> None:
         fake = FakeLibUsb(

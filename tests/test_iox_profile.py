@@ -122,7 +122,7 @@ class IoxProfileTests(unittest.TestCase):
         self.assertEqual(controller["properties"][0]["editor"], "reading_current")
         self.assertEqual(
             [item["id"] for item in controller["cmds"]["accepts"]],
-            ["DISCOVER", "DS2409_STATUS", "AUTO_REFRESH_ENABLE", "AUTO_REFRESH_DISABLE", "USE_FAHRENHEIT", "USE_CELSIUS", "PRECISION_0", "PRECISION_1", "PRECISION_2", "PRECISION_3"],
+            ["DISCOVER", "DS2409_STATUS", "VERIFY_ADAPTER", "AUTO_REFRESH_ENABLE", "AUTO_REFRESH_DISABLE", "ADAPTER_RECOVERY_ENABLE", "ADAPTER_RECOVERY_DISABLE", "USE_FAHRENHEIT", "USE_CELSIUS", "PRECISION_0", "PRECISION_1", "PRECISION_2", "PRECISION_3"],
         )
         properties = {item["id"]: item for item in node["properties"]}
         self.assertEqual(properties["ST"]["editor"], "temperature")

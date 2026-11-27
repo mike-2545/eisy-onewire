@@ -12,6 +12,13 @@ from eisy_onewire.temperature_diagnostic import main
 
 ROM_TEXT = "2811223344556656"
 ROM = bytes.fromhex(ROM_TEXT)
+ADAPTER_ROM = "814455667788999C"
+
+
+class ImmediateAccess:
+    def run(self, expected, operation):
+        self.expected = expected
+        return operation(object(), object())
 
 
 def scratchpad(raw_temperature: int = 0x0191) -> bytes:
@@ -55,8 +62,9 @@ class TemperatureDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
 
         code = main(
-            ["temperature-power", "--rom", ROM_TEXT],
-            adapter_factory=lambda: adapter,
+            ["temperature-power", "--rom", ROM_TEXT, "--adapter-rom", ADAPTER_ROM],
+            adapter_factory=lambda _binding: adapter,
+            access_factory=ImmediateAccess,
             output=output,
         )
 
@@ -73,8 +81,9 @@ class TemperatureDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
 
         code = main(
-            ["temperature-power", "--rom", ROM_TEXT],
-            adapter_factory=lambda: adapter,
+            ["temperature-power", "--rom", ROM_TEXT, "--adapter-rom", ADAPTER_ROM],
+            adapter_factory=lambda _binding: adapter,
+            access_factory=ImmediateAccess,
             output=output,
         )
 
@@ -87,8 +96,9 @@ class TemperatureDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
 
         code = main(
-            ["temperature-read", "--rom", ROM_TEXT],
-            adapter_factory=lambda: adapter,
+            ["temperature-read", "--rom", ROM_TEXT, "--adapter-rom", ADAPTER_ROM],
+            adapter_factory=lambda _binding: adapter,
+            access_factory=ImmediateAccess,
             output=output,
         )
 
@@ -109,8 +119,9 @@ class TemperatureDiagnosticTests(unittest.TestCase):
         errors = io.StringIO()
 
         code = main(
-            ["temperature-read", "--rom", ROM_TEXT],
-            adapter_factory=lambda: adapter,
+            ["temperature-read", "--rom", ROM_TEXT, "--adapter-rom", ADAPTER_ROM],
+            adapter_factory=lambda _binding: adapter,
+            access_factory=ImmediateAccess,
             error_output=errors,
         )
 
@@ -127,8 +138,9 @@ class TemperatureDiagnosticTests(unittest.TestCase):
         errors = io.StringIO()
 
         code = main(
-            ["temperature-read", "--rom", ROM_TEXT],
-            adapter_factory=lambda: adapter,
+            ["temperature-read", "--rom", ROM_TEXT, "--adapter-rom", ADAPTER_ROM],
+            adapter_factory=lambda _binding: adapter,
+            access_factory=ImmediateAccess,
             error_output=errors,
         )
 
@@ -139,15 +151,19 @@ class TemperatureDiagnosticTests(unittest.TestCase):
     def test_invalid_rom_fails_before_adapter_construction(self) -> None:
         creations = 0
 
-        def factory():
+        def factory(_binding):
             nonlocal creations
             creations += 1
             return FakeAdapter()
 
         errors = io.StringIO()
         code = main(
-            ["temperature-power", "--rom", "2811223344556657"],
+            [
+                "temperature-power", "--rom", "2811223344556657",
+                "--adapter-rom", ADAPTER_ROM,
+            ],
             adapter_factory=factory,
+            access_factory=ImmediateAccess,
             error_output=errors,
         )
 

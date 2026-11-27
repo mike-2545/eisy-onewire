@@ -5,22 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
-from .adapter_exclusion import AdapterAccessLock
+from .diagnostic_access import VerifiedDiagnosticAccess
 from .branch_temperature import BranchEventPolicyError, BranchRestorationError
 from .discovery_inventory import DiscoveryInventory
 from .ds2409_transport import BranchHop, Ds2409Branch, Ds2409State, Ds2409Transport
 from .ds2438 import Ds2438Measurement, parse_ds2438_rom
 from .ds2438_transport import Ds2438Transport
-from .ds2490_transport import CtypesLibUsbSessionFactory, Ds2490Transport, UsbSessionFactory
-from .inventory_evidence import (
-    installed_evidence_path,
-    load_inventory_evidence,
-    validate_ds2438_target,
-)
-from .manual_discovery import AdapterBusyError
+from .ds2490_transport import Ds2490Transport
+from .inventory_evidence import validate_ds2438_target
 from .onewire_discovery import dallas_crc8
 from .version import PLUGIN_VERSION
 
@@ -89,28 +83,17 @@ class CouplerControl(Protocol):
 class Ds2438BranchDiagnostic:
     def __init__(
         self,
-        factory: UsbSessionFactory | None = None,
         *,
-        adapter_lock: AdapterAccessLock | None = None,
-        evidence_path: Path | None = None,
-        inventory_loader: Callable[[Path], DiscoveryInventory] = load_inventory_evidence,
+        access: VerifiedDiagnosticAccess | None = None,
         target_validator: Callable[..., tuple[BranchHop, str]] = validate_ds2438_target,
     ) -> None:
-        self._factory = factory
-        self._adapter_lock = adapter_lock or AdapterAccessLock()
-        self._evidence_path = evidence_path or installed_evidence_path()
-        self._inventory_loader = inventory_loader
+        self._access = access or VerifiedDiagnosticAccess.native()
         self._target_validator = target_validator
 
     def read(
         self, request: Ds2438RequestedTarget, *, allow_event_clear: bool = False
     ) -> Ds2438DiagnosticResult:
-        if not self._adapter_lock.acquire(blocking=False):
-            raise AdapterBusyError(
-                "DS9490 is busy in the running plugin or another diagnostic process"
-            )
-        try:
-            inventory = self._inventory_loader(self._evidence_path)
+        def preflight(inventory: DiscoveryInventory) -> Ds2438BranchTarget:
             hop, evidence_timestamp = self._target_validator(
                 inventory,
                 sensor_rom=request.rom,
@@ -124,7 +107,8 @@ class Ds2438BranchDiagnostic:
                 (hop,),
                 evidence_timestamp,
             )
-            factory = self._factory or CtypesLibUsbSessionFactory.for_search_diagnostic()
+
+        def operation(factory, target: Ds2438BranchTarget):
             with factory.open() as session:
                 Ds2490Transport(session).initialize()
                 coupler = Ds2409Transport(session)
@@ -135,8 +119,12 @@ class Ds2438BranchDiagnostic:
                     allow_event_clear=allow_event_clear,
                 )
                 return result
-        finally:
-            self._adapter_lock.release()
+
+        return self._access.run(
+            request.adapter_rom,
+            operation,
+            preflight=preflight,
+        )
 
 
 def read_branch_ds2438(
@@ -257,6 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "event_evidence": result.event_evidence,
             "automatic_retries": 0,
             "eeprom_writes": 0,
+            "identity_verification_searches": 1,
+            "same_retained_handle": True,
         }
         print(json.dumps(report, sort_keys=True))
         return 0

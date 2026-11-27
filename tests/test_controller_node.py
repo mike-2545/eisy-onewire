@@ -4,10 +4,13 @@ from copy import deepcopy
 import unittest
 
 from eisy_onewire.controller_node import (
+    ADAPTER_RECOVERY_DISABLE_COMMAND,
+    ADAPTER_RECOVERY_ENABLE_COMMAND,
     AUTOMATIC_REFRESH_DISABLE_COMMAND,
     AUTOMATIC_REFRESH_ENABLE_COMMAND,
     DISCOVER_COMMAND,
     DS2409_STATUS_COMMAND,
+    VERIFY_ADAPTER_COMMAND,
     USE_CELSIUS_COMMAND,
     USE_FAHRENHEIT_COMMAND,
     create_controller_node_class,
@@ -47,6 +50,7 @@ class ControllerNodeTests(unittest.TestCase):
             adapter_accessible=True,
             discover=lambda: calls.append("discover") or True,
             read_ds2409_status=lambda: calls.append("status") or True,
+            verify_adapter_identity=lambda: calls.append("verify") or True,
         )
         unavailable = node_class(
             object(),
@@ -66,6 +70,7 @@ class ControllerNodeTests(unittest.TestCase):
                 {"driver": "GV0", "value": 0, "uom": 2},
                 {"driver": "GV1", "value": 0, "uom": 25},
                 {"driver": "GV2", "value": 1, "uom": 25},
+                {"driver": "GV3", "value": 0, "uom": 2},
             ],
         )
         self.assertEqual(
@@ -75,20 +80,25 @@ class ControllerNodeTests(unittest.TestCase):
                 {"driver": "GV0", "value": 0, "uom": 2},
                 {"driver": "GV1", "value": 0, "uom": 25},
                 {"driver": "GV2", "value": 1, "uom": 25},
+                {"driver": "GV3", "value": 0, "uom": 2},
             ],
         )
         accessible.query()
-        self.assertEqual(accessible.reports, ["ST", "GV0", "GV1", "GV2"])
+        self.assertEqual(accessible.reports, ["ST", "GV0", "GV1", "GV2", "GV3"])
         self.assertTrue(accessible.discover_devices())
         self.assertTrue(accessible.ds2409_status())
-        self.assertEqual(calls, ["discover", "status"])
+        self.assertTrue(accessible.verify_adapter_identity())
+        self.assertEqual(calls, ["discover", "status", "verify"])
         self.assertEqual(
             accessible.commands,
             {
                 DISCOVER_COMMAND: accessible.discover_devices.__func__,
                 DS2409_STATUS_COMMAND: accessible.ds2409_status.__func__,
+                VERIFY_ADAPTER_COMMAND: accessible.verify_adapter_identity.__func__,
                 AUTOMATIC_REFRESH_ENABLE_COMMAND: accessible.automatic_refresh_enable.__func__,
                 AUTOMATIC_REFRESH_DISABLE_COMMAND: accessible.automatic_refresh_disable.__func__,
+                ADAPTER_RECOVERY_ENABLE_COMMAND: accessible.adapter_recovery_enable.__func__,
+                ADAPTER_RECOVERY_DISABLE_COMMAND: accessible.adapter_recovery_disable.__func__,
                 USE_FAHRENHEIT_COMMAND: accessible.use_fahrenheit.__func__,
                 USE_CELSIUS_COMMAND: accessible.use_celsius.__func__,
                 "PRECISION_0": accessible.precision_0.__func__,
@@ -137,6 +147,22 @@ class ControllerNodeTests(unittest.TestCase):
         )
         self.assertEqual(node.drivers[2]["value"], 1)
         self.assertEqual(node.drivers[3]["value"], 3)
+
+    def test_adapter_recovery_commands_persist_and_display_authorization(self) -> None:
+        calls = []
+        node = create_controller_node_class(FakeNode)(
+            object(),
+            adapter_accessible=False,
+            discover=lambda: False,
+            read_ds2409_status=lambda: False,
+            adapter_recovery_enabled=False,
+            set_adapter_recovery=lambda enabled: calls.append(enabled) or True,
+        )
+        self.assertTrue(node.adapter_recovery_enable())
+        self.assertEqual(node.drivers[4]["value"], 1)
+        self.assertTrue(node.adapter_recovery_disable())
+        self.assertEqual(node.drivers[4]["value"], 0)
+        self.assertEqual(calls, [True, False])
 
 
 if __name__ == "__main__":

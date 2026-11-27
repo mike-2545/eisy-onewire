@@ -13,6 +13,10 @@ from eisy_onewire.plugin_wrapper import run_plugin, synchronize_json_profile  # 
 from eisy_onewire.iox_profile import build_runtime_json_profile  # noqa: E402
 from eisy_onewire.inventory_evidence import installed_evidence_path  # noqa: E402
 from eisy_onewire.controller_node import create_controller_node_class  # noqa: E402
+from eisy_onewire.adapter_binding import AdapterIdentityBinding  # noqa: E402
+from eisy_onewire.temperature_service import TemperatureService  # noqa: E402
+from eisy_onewire.ds18b20_transport import Ds18b20Adapter  # noqa: E402
+from eisy_onewire.branch_temperature import BranchTemperatureAdapter  # noqa: E402
 from eisy_onewire.ds18b20_node import create_ds18b20_node_class  # noqa: E402
 from eisy_onewire.ds2438_node import create_ds2438_node_class  # noqa: E402
 from eisy_onewire.ds2438_analog_node import (  # noqa: E402
@@ -20,6 +24,18 @@ from eisy_onewire.ds2438_analog_node import (  # noqa: E402
     create_ds2438_solar_node_class,
 )
 from eisy_onewire.node_registry import OneWireNodeRegistry  # noqa: E402
+from eisy_onewire.ds2438_service import (  # noqa: E402
+    RootDs2438Adapter,
+    BranchDs2438Adapter,
+    RootDs2438MeasurementAdapter,
+    BranchDs2438MeasurementAdapter,
+)
+from eisy_onewire.manual_discovery import ManualDiscoveryService  # noqa: E402
+from eisy_onewire.topology_discovery import Ds2409TopologyAdapter  # noqa: E402
+from eisy_onewire.ds2409_status import (  # noqa: E402
+    Ds2409StatusAdapter,
+    ManualDs2409StatusService,
+)
 from eisy_onewire.sensor_config import load_default_parameters  # noqa: E402
 from eisy_onewire.sensor_config import Ds2438Application  # noqa: E402
 from eisy_onewire.usb_detector import DetectionStatus  # noqa: E402
@@ -27,23 +43,36 @@ from eisy_onewire.version import PLUGIN_VERSION  # noqa: E402
 
 
 def main() -> None:
-    """Start the platform interface; no temperature operation runs automatically."""
+    """Start the platform interface with policy-gated adapter recovery."""
     import udi_interface
 
+    adapter_binding = AdapterIdentityBinding()
     controller_node = create_controller_node_class(udi_interface.Node)
     sensor_node = create_ds18b20_node_class(
         udi_interface.Node,
         logger=udi_interface.LOGGER,
+        service_factory=lambda: TemperatureService(
+            adapter_factory=lambda: Ds18b20Adapter(adapter_binding)
+        ),
+        branch_service_factory=lambda: BranchTemperatureAdapter(adapter_binding),
     )
     ds2438_node = create_ds2438_node_class(
         udi_interface.Node,
         logger=udi_interface.LOGGER,
+        root_service_factory=lambda: RootDs2438Adapter(adapter_binding),
+        branch_service_factory=lambda: BranchDs2438Adapter(adapter_binding),
     )
     ds2438_analog_node = create_ds2438_analog_node_class(
-        udi_interface.Node, logger=udi_interface.LOGGER
+        udi_interface.Node,
+        logger=udi_interface.LOGGER,
+        root_service_factory=lambda: RootDs2438MeasurementAdapter(adapter_binding),
+        branch_service_factory=lambda: BranchDs2438MeasurementAdapter(adapter_binding),
     )
     ds2438_solar_node = create_ds2438_solar_node_class(
-        udi_interface.Node, logger=udi_interface.LOGGER
+        udi_interface.Node,
+        logger=udi_interface.LOGGER,
+        root_service_factory=lambda: RootDs2438MeasurementAdapter(adapter_binding),
+        branch_service_factory=lambda: BranchDs2438MeasurementAdapter(adapter_binding),
     )
     interface = udi_interface.Interface(
         [controller_node, sensor_node, ds2438_node, ds2438_analog_node, ds2438_solar_node]
@@ -67,6 +96,13 @@ def main() -> None:
         inventory_evidence_path=installed_evidence_path(),
         presentation_profile_updater=lambda presentation: synchronize_json_profile(
             interface, build_runtime_json_profile(presentation)
+        ),
+        adapter_binding=adapter_binding,
+        discovery_factory=lambda lock: ManualDiscoveryService(
+            lock, search=Ds2409TopologyAdapter(adapter_binding).discover
+        ),
+        status_factory=lambda lock: ManualDs2409StatusService(
+            lock, read=Ds2409StatusAdapter(adapter_binding).read
         ),
     )
     json_profile = build_runtime_json_profile()

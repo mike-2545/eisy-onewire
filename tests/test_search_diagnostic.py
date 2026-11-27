@@ -17,6 +17,14 @@ from eisy_onewire.search_diagnostic import (
     main,
 )
 
+ADAPTER_ROM = "814455667788999C"
+
+
+class ImmediateAccess:
+    def run(self, expected, operation):
+        self.expected = expected
+        return operation(object(), object())
+
 
 def rom(prefix: str) -> bytes:
     raw = bytes.fromhex(prefix)
@@ -90,8 +98,9 @@ class SearchDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
 
         code = main(
-            ["search-rom"],
-            diagnostic_factory=lambda: diagnostic,
+            ["search-rom", "--adapter-rom", ADAPTER_ROM],
+            diagnostic_factory=lambda _adapter: diagnostic,
+            access_factory=ImmediateAccess,
             output=output,
         )
 
@@ -137,15 +146,16 @@ class SearchDiagnosticTests(unittest.TestCase):
             def run(self):
                 raise SearchLimitExceeded("more than 15 devices are present")
 
-        def factory():
+        def factory(_adapter):
             nonlocal creations
             creations += 1
             return LimitedDiagnostic()
 
         errors = io.StringIO()
         code = main(
-            ["search-rom"],
+            ["search-rom", "--adapter-rom", ADAPTER_ROM],
             diagnostic_factory=factory,  # type: ignore[arg-type]
+            access_factory=ImmediateAccess,
             error_output=errors,
         )
 
@@ -164,7 +174,7 @@ class SearchDiagnosticTests(unittest.TestCase):
             def run(self):
                 raise UsbTransferTimeout("bounded EP1 poll timed out")
 
-        def factory():
+        def factory(_adapter):
             nonlocal creations
             creations += 1
             return FailingDiagnostic()
@@ -173,8 +183,9 @@ class SearchDiagnosticTests(unittest.TestCase):
         errors = io.StringIO()
 
         code = main(
-            ["search-rom"],
+            ["search-rom", "--adapter-rom", ADAPTER_ROM],
             diagnostic_factory=factory,  # type: ignore[arg-type]
+            access_factory=ImmediateAccess,
             output=output,
             error_output=errors,
         )
@@ -200,8 +211,9 @@ class SearchDiagnosticTests(unittest.TestCase):
 
         errors = io.StringIO()
         code = main(
-            ["search-rom"],
-            diagnostic_factory=FailingDiagnostic,  # type: ignore[arg-type]
+            ["search-rom", "--adapter-rom", ADAPTER_ROM],
+            diagnostic_factory=lambda _adapter: FailingDiagnostic(),
+            access_factory=ImmediateAccess,
             error_output=errors,
         )
 
@@ -228,8 +240,9 @@ class SearchDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
 
         code = main(
-            ["search-rom"],
-            diagnostic_factory=lambda: diagnostic,
+            ["search-rom", "--adapter-rom", ADAPTER_ROM],
+            diagnostic_factory=lambda _adapter: diagnostic,
+            access_factory=ImmediateAccess,
             output=output,
         )
 
