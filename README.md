@@ -4,7 +4,7 @@
 the DS9490R USB adapter directly through FreeBSD libusb, so a separate
 Raspberry Pi, OWFS server, or network bridge is not required.
 
-Version **0.3.16** is a **beta release candidate**. Version 0.3.15 was exercised on a personal
+Version **0.3.17** is a **beta release candidate**. Version 0.3.16 was exercised on a personal
 eisy with a DS9490R, DS18B20 temperature sensors, a DS2409 coupler, and one
 explicitly identified DS2438/Honeywell HIH-4000 humidity application. Review
 the [known limitations](#known-limitations) before enabling branch access or
@@ -20,6 +20,8 @@ automatic refresh.
   event-latch safeguards.
 - Supports an explicitly configured DS2438 with a Honeywell HIH-4000-series
   analog humidity sensor.
+- Supports explicitly configured DS2438 generic analog-voltage and calibrated
+  solar-irradiance applications.
 - Displays temperature in Fahrenheit or Celsius with 0--3 decimal places.
 - Preserves the last valid reading as stale when a later read fails or after a
   restart.
@@ -120,6 +122,10 @@ Use the complete CRC-valid ROM reported by discovery. Do not assume every
 DS2438 is a humidity sensor. Details and acceptance qualifications are in the
 [user guide](docs/user-guide.md#ds2438hih-4000-configuration).
 
+Other explicit choices are `analog_voltage` and `solar_irradiance`. Solar
+selection creates ROM-specific multiplier and offset parameters. A positive
+multiplier is mandatory; there is intentionally no universal default.
+
 ## Current and stale readings
 
 **Current Reading Valid** (`GV0`) is true only after a fresh read completes,
@@ -135,12 +141,13 @@ stale. Cached values also return as stale after plugin restart until refreshed.
 - DS18B20 parasite-powered conversion is not supported. Sensors must be
   externally powered.
 - No automatic discovery and no automatic retries.
-- Only explicitly identified HIH-4000 applications are supported for DS2438
-  humidity. No calibration editor or other analog humidity models are exposed.
+- Only explicitly identified DS2438 applications are measured. Solar accuracy
+  depends on operator-supplied calibration; unidentified analog humidity
+  circuits remain `unassigned`.
 - DS2409 event latches can be irreversibly cleared by All-Lines-Off. The safe
   defaults refuse operations that require acknowledgment.
-- Unattended DS2438/branch humidity polling is automated-test supported but was
-  not part of the v0.3.15 live acceptance test.
+- Unattended DS2438/branch humidity polling passed controlled live acceptance
+  in v0.3.16 under explicit DS2409 authorization.
 - This is beta software; preserve backups and validate manually before enabling
   automation.
 

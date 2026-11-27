@@ -14,7 +14,8 @@ The controller shows:
 - **Temperature Decimal Places**.
 
 DS18B20 nodes show temperature, Current Reading Valid, and Desired Refresh
-Interval. Configured DS2438/HIH-4000 nodes also show Relative Humidity.
+Interval. Configured DS2438 nodes show application-specific humidity, VAD/VDD,
+or solar irradiance properties.
 
 ## Discover Devices
 
@@ -54,6 +55,8 @@ IoX name untouched. The stable node address never changes.
 
 - DS18B20: **Refresh Temperature**
 - DS2438/HIH-4000: **Refresh Temperature and Humidity**
+- DS2438 analog voltage: **Refresh Analog Voltages**
+- DS2438 solar: **Refresh Solar Irradiance**
 
 A refresh obtains the shared adapter lock, performs one bounded transaction,
 validates CRC/data, and releases all USB resources. Branch reads additionally
@@ -71,12 +74,8 @@ targets, uses monotonic deadlines, and performs no discovery. Failed reads set
 GV0 false and retain the last valid ST/GV2 as stale.
 
 Branch sensors also require `_ds2409_unattended_branch_access_policy`. This is
-independent of both manual policies. Controlled v0.3.16 acceptance exercised
-repeated, serialized root-bus DS18B20, one-level DS2409 branch DS18B20, and
-DS2438/HIH-4000 scheduled measurements. Every sensor remained current and the
-available PG3 event evidence showed no retry or restoration failure. Other
-coupler paths and physical networks remain automated-test-only until validated
-by their operator.
+independent of both manual policies. Root-bus DS18B20 scheduling was live-tested.
+Unattended DS2438 branch measurement passed controlled v0.3.16 acceptance.
 
 ## Temperature presentation
 
@@ -119,17 +118,32 @@ invalid/nonfinite voltages or results. It does not write DS2438 EEPROM.
 Nominal sensor accuracy is a hardware specification, not the same as one-decimal
 display precision.
 
-New DS2438 nodes start with interval Off. Controlled live acceptance verified
-both a manual branch measurement and repeated unattended measurements with
-validated restoration and no automatic retry. Exact raw VAD/VDD and
-uncompensated RH were not retained in the externally accessible acceptance
-evidence. The test covered one physically identified HIH-4000 application on a
-single-level DS2409 branch; it does not establish every wiring topology.
+New DS2438 nodes start with interval Off. The v0.3.15 live acceptance verified
+one manual branch measurement with validated restoration. Exact VAD/VDD and
+uncompensated RH were not retained in the original v0.3.15 acceptance evidence.
+Unattended measurement subsequently passed the v0.3.16 controlled acceptance.
 
 Changing the application back to `unassigned` revokes manual and scheduled
 acquisition. An existing node is retained with its last validated values stale
 rather than being destructively removed. Selecting `hih4000` again reconciles
 the same stable address.
+
+### Analog voltage and solar irradiance
+
+Select `analog_voltage` only after identifying a DS2438 circuit whose VAD and
+VDD values should be exposed directly. Select `solar_irradiance` only for a
+verified linear analog irradiance sensor. The plugin then creates multiplier
+and offset parameters for that ROM and uses:
+
+```text
+irradiance_w_m2 = VAD * multiplier_w_m2_per_volt + offset_w_m2
+```
+
+There is no default multiplier. Small negative results are retained as useful
+zero-offset evidence, not silently clamped; nonfinite and out-of-range results
+fail closed. Changing calibration marks cached irradiance stale and performs no
+measurement. Application changes that would replace an existing IoX node
+definition are blocked rather than deleting the node or breaking programs.
 
 ## Advanced DS2409 Permissions
 

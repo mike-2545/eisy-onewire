@@ -3,6 +3,17 @@
 All notable user-facing changes are summarized here. Detailed engineering
 records are indexed in [docs/development-history.md](docs/development-history.md).
 
+## 0.3.17 — DS2438 analog voltage and solar irradiance
+
+- Added explicit `analog_voltage` and `solar_irradiance` DS2438 applications.
+- Added IoX VAD/VDD and calibrated W/m² nodes using official UOMs 72 and 74.
+- Added isolated, auto-populated solar multiplier/offset configuration with no
+  universal calibration default and no configuration-triggered USB activity.
+- Preserved stable identities and operator names; unsafe node-definition
+  transitions fail closed without deleting or recreating nodes.
+- Corrected VAD conversion validation to accept the documented 0--10 V ADC
+  code range while documenting reduced guaranteed accuracy below 1.5 V.
+
 ## 0.3.16 — Configuration usability and reliability
 
 - Isolated optional friendly-name errors so they cannot disable unrelated
@@ -15,13 +26,6 @@ records are indexed in [docs/development-history.md](docs/development-history.md
 - Added idempotent, inventory-derived DS2438 application selectors whose safe
   default is `unassigned`; application identification remains explicit.
 - Preserved DS2409 authorization defaults and all hardware transaction paths.
-- Completed controlled live acceptance of repeated serialized root DS18B20,
-  one-level DS2409 branch DS18B20, and DS2438/HIH-4000 scheduled measurements;
-  all sensors remained current with no retry or restoration failure in the
-  available PG3 evidence.
-- Confirmed the platform node-name cache can remain stale after an external IoX
-  rename; ordinary reconciliation now treats the IoX-visible name as
-  operator-owned and favors noninterference.
 
 ## 0.3.15 — Public beta candidate
 

@@ -45,6 +45,8 @@ class Ds2438Tests(unittest.TestCase):
 
     def test_voltage_decoding_and_documented_ranges(self) -> None:
         self.assertEqual(decode_voltage(validate_page(page(voltage_raw=198))), 1.98)
+        self.assertEqual(decode_voltage(validate_page(page(voltage_raw=0))), 0.0)
+        validate_voltage_pair(0.0, 4.97)
         validate_voltage_pair(1.98, 5.21)
         with self.assertRaises(Ds2438RangeError):
             decode_voltage(validate_page(page(voltage_raw=0x8400)))

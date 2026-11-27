@@ -35,7 +35,7 @@ class PluginPackageTests(unittest.TestCase):
                 manifest = json.load(package.extractfile("eisy-onewire.iox_plugin.json"))
 
         self.assertEqual(names, list(builder.PACKAGE_FILES))
-        self.assertEqual(len(names), 47)
+        self.assertEqual(len(names), 49)
         self.assertIn("LICENSE", names)
         self.assertIn("src/eisy_onewire/onewire_discovery.py", names)
         self.assertIn("src/eisy_onewire/search_diagnostic.py", names)
@@ -61,8 +61,10 @@ class PluginPackageTests(unittest.TestCase):
         self.assertIn("src/eisy_onewire/ds2438_transport.py", names)
         self.assertIn("src/eisy_onewire/ds2438_diagnostic.py", names)
         self.assertIn("src/eisy_onewire/ds2438_humidity.py", names)
+        self.assertIn("src/eisy_onewire/ds2438_analog.py", names)
         self.assertIn("src/eisy_onewire/ds2438_service.py", names)
         self.assertIn("src/eisy_onewire/ds2438_node.py", names)
+        self.assertIn("src/eisy_onewire/ds2438_analog_node.py", names)
         self.assertIn("src/eisy_onewire/topology_discovery.py", names)
         self.assertIn("src/eisy_onewire/sensor_config.py", names)
         self.assertIn("default-sensors.json", names)
@@ -79,7 +81,7 @@ class PluginPackageTests(unittest.TestCase):
         self.assertEqual(manifest["plugin"]["hardwareConfig"]["filename"], "ds9490.conf")
         self.assertEqual(
             [node["id"] for node in manifest["nodedefs"]],
-            ["onewire_controller", "ds18b20", "ds2438_hih4000"],
+            ["onewire_controller", "ds18b20", "ds2438_hih4000", "ds2438_analog_voltage", "ds2438_solar_irradiance"],
         )
         self.assertEqual(manifest["plugin"]["version"], PLUGIN_VERSION)
 
@@ -98,7 +100,7 @@ class PluginPackageTests(unittest.TestCase):
         )
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-        self.assertEqual(PLUGIN_VERSION, "0.3.16")
+        self.assertEqual(PLUGIN_VERSION, "0.3.17")
         self.assertEqual(metadata["plugin"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["dependencies"], ["udi_interface==3.4.9"])

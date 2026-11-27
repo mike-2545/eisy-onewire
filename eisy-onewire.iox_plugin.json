@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/universaldevices/iox-vscode-plugin/main/schemas/plugin.schema.json",
   "plugin": {
     "name": "eisy-onewire",
-    "description": "Generic 1-Wire controller with DS18B20 and identified HIH-4000 support",
+    "description": "Native eisy 1-Wire controller with temperature, humidity, and analog applications",
     "publisher": "Mike",
     "language": "python3",
     "executableName": "plugin.py",
@@ -25,7 +25,7 @@
       "udi_interface==3.4.9"
     ],
     "nodesAreStatic": false,
-    "version": "0.3.16"
+    "version": "0.3.17"
   },
   "editors": [
     {
@@ -68,6 +68,22 @@
       "uom": "Percent | 51",
       "min": 0,
       "max": 100,
+      "step": 0.1,
+      "precision": 1
+    },
+    {
+      "id": "analog_voltage",
+      "uom": "Volt | 72",
+      "min": 0,
+      "max": 10,
+      "step": 0.01,
+      "precision": 2
+    },
+    {
+      "id": "solar_irradiance",
+      "uom": "Watts per Square Meter | 74",
+      "min": -5000,
+      "max": 5000,
       "step": 0.1,
       "precision": 1
     }
@@ -168,6 +184,50 @@
       "commands": {
         "accepts": [
           {"id": "REFRESH", "name": "Refresh Temperature and Humidity"},
+          {"id": "REFRESH_OFF", "name": "Refresh Off"},
+          {"id": "REFRESH_30", "name": "Refresh 30 sec"},
+          {"id": "REFRESH_60", "name": "Refresh 60 sec"},
+          {"id": "REFRESH_120", "name": "Refresh 120 sec"},
+          {"id": "REFRESH_300", "name": "Refresh 300 sec"}
+        ],
+        "sends": []
+      }
+    },
+    {
+      "id": "ds2438_analog_voltage",
+      "name": "1-Wire Analog Voltage Sensor",
+      "icon": "Electricity",
+      "properties": [
+        {"id": "ST", "name": "Analog Input Voltage", "editor": {"idref": "analog_voltage"}, "is_settable": false},
+        {"id": "GV0", "name": "Current Reading Valid", "editor": {"idref": "reading_current"}, "is_settable": false},
+        {"id": "GV1", "name": "Desired Refresh Interval", "editor": {"idref": "refresh_interval"}, "is_settable": false},
+        {"id": "GV2", "name": "Supply Voltage", "editor": {"idref": "analog_voltage"}, "is_settable": false}
+      ],
+      "commands": {
+        "accepts": [
+          {"id": "REFRESH", "name": "Refresh Analog Voltages"},
+          {"id": "REFRESH_OFF", "name": "Refresh Off"},
+          {"id": "REFRESH_30", "name": "Refresh 30 sec"},
+          {"id": "REFRESH_60", "name": "Refresh 60 sec"},
+          {"id": "REFRESH_120", "name": "Refresh 120 sec"},
+          {"id": "REFRESH_300", "name": "Refresh 300 sec"}
+        ],
+        "sends": []
+      }
+    },
+    {
+      "id": "ds2438_solar_irradiance",
+      "name": "1-Wire Solar Irradiance Sensor",
+      "icon": "Sun",
+      "properties": [
+        {"id": "ST", "name": "Solar Irradiance", "editor": {"idref": "solar_irradiance"}, "is_settable": false},
+        {"id": "GV0", "name": "Current Reading Valid", "editor": {"idref": "reading_current"}, "is_settable": false},
+        {"id": "GV1", "name": "Desired Refresh Interval", "editor": {"idref": "refresh_interval"}, "is_settable": false},
+        {"id": "GV2", "name": "Raw Analog Input Voltage", "editor": {"idref": "analog_voltage"}, "is_settable": false}
+      ],
+      "commands": {
+        "accepts": [
+          {"id": "REFRESH", "name": "Refresh Solar Irradiance"},
           {"id": "REFRESH_OFF", "name": "Refresh Off"},
           {"id": "REFRESH_30", "name": "Refresh 30 sec"},
           {"id": "REFRESH_60", "name": "Refresh 60 sec"},

@@ -24,16 +24,6 @@ IoX Admin Console. A cached UI can temporarily show old commands even when the
 profile is installed. Reinstall only after checking profile acknowledgments and
 the persisted node inventory.
 
-## A renamed sensor appears with an older name in PG3/eisy-ui records
-
-Standard IoX Rename owns the displayed sensor name. Some PG3/eisy-ui database
-views can retain an older cached name even after IoX accepts the rename. The
-plugin deliberately reconciles existing nodes with `rename=False`; it does not
-use that cached database value to reconstruct user intent. Confirm the name in
-IoX, and do not add a legacy ROM-keyed override merely to repair the cache.
-Adding or changing an override is an explicit one-time rename request; removing
-it leaves the IoX name untouched.
-
 ## Discovery finds only family `0x81`
 
 The `0x81` ROM is the DS9490 identification device. Check cable power and the
@@ -76,8 +66,17 @@ Invalid application, topology, or DS2409 policy settings still fail closed.
 
 That is the safe default. The plugin creates
 `_ds2438_application_<ROM>=unassigned` from validated inventory. Physically
-identify the analog application, then select `hih4000`. A family code alone is
+identify the analog application, then select `hih4000`, `analog_voltage`, or
+`solar_irradiance`. A family code alone is
 insufficient. Unsupported or misspelled models fail closed.
+
+## Solar node stays stale or is not scheduled
+
+Verify its ROM-specific multiplier is a finite positive W/m²/V value. The
+generated `unassigned` placeholder deliberately authorizes no acquisition.
+Invalid calibration affects only that sensor. An application-transition Notice
+means an existing node definition would need replacement; the plugin refuses
+to delete/recreate it automatically.
 
 ## Reporting a bug
 

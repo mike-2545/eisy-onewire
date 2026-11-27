@@ -66,9 +66,9 @@ class HardwareConfigTests(unittest.TestCase):
 
         self.assertEqual(
             [node["id"] for node in self.metadata["nodedefs"]],
-            ["onewire_controller", "ds18b20", "ds2438_hih4000"],
+            ["onewire_controller", "ds18b20", "ds2438_hih4000", "ds2438_analog_voltage", "ds2438_solar_irradiance"],
         )
-        controller, node, humidity_node = self.metadata["nodedefs"]
+        controller, node, humidity_node, analog_node, solar_node = self.metadata["nodedefs"]
         self.assertEqual(
             [item["id"] for item in controller["properties"]], ["ST", "GV0", "GV1", "GV2"]
         )
@@ -82,6 +82,8 @@ class HardwareConfigTests(unittest.TestCase):
         )
         self.assertEqual(node["commands"]["sends"], [])
         self.assertEqual(humidity_node["id"], "ds2438_hih4000")
+        self.assertEqual(analog_node["properties"][0]["editor"]["idref"], "analog_voltage")
+        self.assertEqual(solar_node["properties"][0]["editor"]["idref"], "solar_irradiance")
         self.assertEqual(
             [item["id"] for item in humidity_node["properties"]],
             ["ST", "GV0", "GV1", "GV2"],

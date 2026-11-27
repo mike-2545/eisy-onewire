@@ -31,6 +31,12 @@ from .ds2438_humidity import (
     Ds2438MeasurementCache,
     Hih4000Reading,
 )
+from .ds2438_analog import (
+    DS2438_ANALOG_CACHE_KEY,
+    Ds2438AnalogMeasurementCache,
+    CachedAnalogReading,
+    SOLAR_MULTIPLIER_UNASSIGNED,
+)
 from .ds2409_transport import branch_path_label
 from .manual_discovery import AdapterBusyError, ManualDiscoveryService
 from .inventory_evidence import (
@@ -50,6 +56,8 @@ from .sensor_config import (
     CONFIG_VERSION,
     CONFIG_VERSION_KEY,
     DS2438_APPLICATION_PREFIX,
+    DS2438_SOLAR_MULTIPLIER_PREFIX,
+    DS2438_SOLAR_OFFSET_PREFIX,
     ConfiguredDs18b20,
     ConfiguredDs2438,
     Ds2438Application,
@@ -84,6 +92,8 @@ REFRESH_CONFIGURATION_NOTICE_KEY = "automatic_refresh_configuration"
 TEMPERATURE_PRESENTATION_NOTICE_KEY = "temperature_presentation"
 DS2438_CACHE_NOTICE_KEY = "ds2438_measurement_cache"
 DS2438_APPLICATION_NOTICE_KEY = "ds2438_application_parameters"
+DS2438_ANALOG_CACHE_NOTICE_KEY = "ds2438_analog_measurement_cache"
+DS2438_TRANSITION_NOTICE_KEY = "ds2438_application_transition"
 
 
 class Logger(Protocol):
@@ -121,6 +131,7 @@ class OneWireNodeRegistry:
         controller_class: type,
         sensor_class: type,
         ds2438_sensor_class: type | None = None,
+        ds2438_sensor_classes: Mapping[Ds2438Application, type] | None = None,
         discovery_factory: Callable[
             [threading.Lock], ManualDiscoveryService
         ] = ManualDiscoveryService,
@@ -147,6 +158,11 @@ class OneWireNodeRegistry:
         self._controller_class = controller_class
         self._sensor_class = sensor_class
         self._ds2438_sensor_class = ds2438_sensor_class
+        self._ds2438_sensor_classes = dict(ds2438_sensor_classes or {})
+        if ds2438_sensor_class is not None:
+            self._ds2438_sensor_classes.setdefault(
+                Ds2438Application.HIH4000, ds2438_sensor_class
+            )
         self._adapter_lock = adapter_lock_factory()
         self._inventory_evidence_path = inventory_evidence_path
         self._presentation_profile_updater = presentation_profile_updater
@@ -178,6 +194,8 @@ class OneWireNodeRegistry:
         self._temperature_presentation_consistent = True
         self._ds2438_cache = Ds2438MeasurementCache()
         self._ds2438_cache_valid = True
+        self._ds2438_analog_cache = Ds2438AnalogMeasurementCache()
+        self._ds2438_analog_cache_valid = True
         self._registered: dict[str, object] = {}
         self._event_flags_cleared: tuple[EventFlagAcknowledgement, ...] = ()
         self._presentation_worker = presentation_worker_factory(
@@ -285,6 +303,20 @@ class OneWireNodeRegistry:
             else:
                 self._ds2438_cache_valid = True
                 self._interface.Notices.delete(DS2438_CACHE_NOTICE_KEY)
+            try:
+                self._ds2438_analog_cache = Ds2438AnalogMeasurementCache.from_data(
+                    values.get(DS2438_ANALOG_CACHE_KEY)
+                )
+            except ValueError as exc:
+                self._ds2438_analog_cache = Ds2438AnalogMeasurementCache()
+                self._ds2438_analog_cache_valid = False
+                self._interface.Notices[DS2438_ANALOG_CACHE_NOTICE_KEY] = json.dumps(
+                    {"status": "invalid_ds2438_analog_cache", "detail": str(exc)},
+                    sort_keys=True,
+                )
+            else:
+                self._ds2438_analog_cache_valid = True
+                self._interface.Notices.delete(DS2438_ANALOG_CACHE_NOTICE_KEY)
             try:
                 self._inventory = DiscoveryInventory.from_data(values.get(INVENTORY_KEY))
             except DiscoveryInventoryError as exc:
@@ -536,9 +568,9 @@ class OneWireNodeRegistry:
         inventory_by_rom: Mapping[bytes, KnownDevice],
         refresh: RefreshConfiguration,
     ) -> tuple[RefreshConfiguration, bool]:
-        """Register only explicitly identified family-0x26 HIH-4000 devices."""
+        """Register explicitly identified DS2438 applications without guessing."""
 
-        if self._ds2438_sensor_class is None or self._configured_ds2438 is None:
+        if not self._ds2438_sensor_classes or self._configured_ds2438 is None:
             return refresh, False
         changed = False
         for configured in self._configured_ds2438:
@@ -552,8 +584,31 @@ class OneWireNodeRegistry:
                     if callable(authorize):
                         authorize(False)
                 continue
+            node_class = self._ds2438_sensor_classes.get(configured.application)
+            if node_class is None:
+                continue
+            application_notice_key = f"ds2438_application_{configured.address}"
+            if configured.application_error is not None:
+                self._interface.Notices[application_notice_key] = json.dumps(
+                    {
+                        "status": "invalid_application_configuration",
+                        "application": configured.application.value,
+                        "rom": configured.rom.hex().upper(),
+                        "detail": configured.application_error,
+                        "hardware_authorized": False,
+                        "unrelated_sensors_affected": False,
+                    },
+                    sort_keys=True,
+                )
+            else:
+                self._interface.Notices.delete(application_notice_key)
             previous = refresh.sensor(configured.rom)
-            default_name = f"HIH-4000 {configured.rom[1:7].hex().upper()}"
+            application_label = {
+                Ds2438Application.HIH4000: "HIH-4000",
+                Ds2438Application.ANALOG_VOLTAGE: "Analog",
+                Ds2438Application.SOLAR_IRRADIANCE: "Solar",
+            }[configured.application]
+            default_name = f"{application_label} {configured.rom[1:7].hex().upper()}"
             legacy = self._friendly_name_overrides.get(configured.rom)
             legacy_name = legacy.name if legacy is not None else None
             resolved = resolved_sensor_configuration(
@@ -575,9 +630,25 @@ class OneWireNodeRegistry:
                 self._branch_read_event_policy is Ds2409EventFlagPolicy.ACKNOWLEDGE
             )
             if current is not None:
+                current_application = getattr(current, "application", "hih4000")
+                if current_application != configured.application.value:
+                    authorize = getattr(current, "set_application_authorized", None)
+                    if callable(authorize):
+                        authorize(False)
+                    self._interface.Notices[DS2438_TRANSITION_NOTICE_KEY] = json.dumps(
+                        {
+                            "status": "application_transition_requires_review",
+                            "rom": configured.rom.hex().upper(),
+                            "from": current_application,
+                            "to": configured.application.value,
+                            "detail": "IoX node-definition replacement is not performed automatically",
+                        },
+                        sort_keys=True,
+                    )
+                    continue
                 authorize = getattr(current, "set_application_authorized", None)
                 if callable(authorize):
-                    authorize(True)
+                    authorize(configured.application_error is None)
                 if explicit_legacy_rename:
                     rename = getattr(current, "rename", None)
                     if callable(rename):
@@ -596,19 +667,31 @@ class OneWireNodeRegistry:
                 set_presentation = getattr(current, "set_temperature_presentation", None)
                 if callable(set_presentation):
                     set_presentation(self._temperature_presentation)
+                set_calibration = getattr(current, "set_calibration", None)
+                if callable(set_calibration):
+                    set_calibration(
+                        configured.solar_calibration, configured.application_error
+                    )
                 continue
-            node = self._ds2438_sensor_class(
-                self._interface,
+            self._interface.Notices.delete(DS2438_TRANSITION_NOTICE_KEY)
+            cache = None
+            if configured.application is Ds2438Application.HIH4000:
+                cache = (
+                    self._ds2438_cache.reading(configured.rom)
+                    if self._ds2438_cache_valid else None
+                )
+            else:
+                cache = (
+                    self._ds2438_analog_cache.reading(configured.rom)
+                    if self._ds2438_analog_cache_valid else None
+                )
+            kwargs = dict(
                 primary=DEFAULT_CONTROLLER_ADDRESS,
                 address=configured.address,
                 name=resolved.effective_name,
                 rom=configured.rom,
                 adapter_lock=self._adapter_lock,
-                cached_reading=(
-                    self._ds2438_cache.reading(configured.rom)
-                    if self._ds2438_cache_valid
-                    else None
-                ),
+                cached_reading=cache,
                 branch_path=known.path,
                 branch_target=target,
                 branch_event_clear_allowed=allow_clear,
@@ -619,13 +702,31 @@ class OneWireNodeRegistry:
                         rom, seconds
                     )
                 ),
-                temperature_presentation=self._temperature_presentation,
-                record_measurement=self.record_ds2438_measurement,
+            )
+            if configured.application is Ds2438Application.HIH4000:
+                kwargs.update(
+                    temperature_presentation=self._temperature_presentation,
+                    record_measurement=self.record_ds2438_measurement,
+                )
+            else:
+                kwargs.update(
+                    calibration=configured.solar_calibration,
+                    configuration_error=configured.application_error,
+                    record_measurement=self.record_ds2438_analog_measurement,
+                )
+            node = node_class(
+                self._interface,
+                **kwargs,
             )
             self._interface.addNode(node, rename=False)
             self._registered[configured.address] = node
+            if configured.application_error is not None:
+                authorize = getattr(node, "set_application_authorized", None)
+                if callable(authorize):
+                    authorize(False)
             self._logger.info(
-                "Configured DS2438/HIH-4000 %s as %s under %s",
+                "Configured DS2438/%s %s as %s under %s",
+                configured.application.value,
                 configured.rom.hex().upper(),
                 resolved.effective_name,
                 DEFAULT_CONTROLLER_ADDRESS,
@@ -704,6 +805,38 @@ class OneWireNodeRegistry:
                 return False
             self._ds2438_cache = proposed
             self._interface.Notices.delete(DS2438_CACHE_NOTICE_KEY)
+            return True
+
+    def record_ds2438_analog_measurement(self, reading: CachedAnalogReading) -> bool:
+        """Atomically persist one application-neutral or calibrated reading."""
+
+        with self._state_lock:
+            if not self._ds2438_analog_cache_valid:
+                return False
+            configured = next(
+                (item for item in (self._configured_ds2438 or ()) if item.rom == reading.rom),
+                None,
+            )
+            known = any(
+                item.rom == reading.rom and item.family_code == DS2438_FAMILY
+                for item in self._inventory.devices
+            )
+            if configured is None or not known:
+                return False
+            try:
+                proposed = self._ds2438_analog_cache.with_reading(reading)
+                self._custom_data[DS2438_ANALOG_CACHE_KEY] = proposed.to_data()
+            except Exception as exc:
+                self._interface.Notices[DS2438_ANALOG_CACHE_NOTICE_KEY] = json.dumps(
+                    {
+                        "status": "ds2438_analog_cache_write_failed",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+                return False
+            self._ds2438_analog_cache = proposed
+            self._interface.Notices.delete(DS2438_ANALOG_CACHE_NOTICE_KEY)
             return True
 
     def set_temperature_unit(self, unit: TemperatureUnit) -> bool:
@@ -958,9 +1091,28 @@ class OneWireNodeRegistry:
                 if (
                     known.family_code == DS2438_FAMILY
                     and ds2438_applications.get(setting.rom)
-                    is not Ds2438Application.HIH4000
+                    not in (
+                        Ds2438Application.HIH4000,
+                        Ds2438Application.ANALOG_VOLTAGE,
+                        Ds2438Application.SOLAR_IRRADIANCE,
+                    )
                 ):
                     continue
+                if known.family_code == DS2438_FAMILY:
+                    configured_ds2438 = next(
+                        (
+                            item for item in (self._configured_ds2438 or ())
+                            if item.rom == setting.rom
+                        ),
+                        None,
+                    )
+                    if (
+                        configured_ds2438 is None
+                        or getattr(node, "application", "hih4000")
+                        != configured_ds2438.application.value
+                        or configured_ds2438.application_error is not None
+                    ):
+                        continue
                 automatic_eligible = True
                 if known.path:
                     automatic_eligible = (
@@ -1042,6 +1194,26 @@ class OneWireNodeRegistry:
                 continue
             values[key] = Ds2438Application.UNASSIGNED.value
             changed = True
+        # Solar calibration fields are application-specific and never appear
+        # for unassigned, HIH-4000, or generic analog devices.
+        for configured in parse_ds2438_applications(values):
+            if configured.application is not Ds2438Application.SOLAR_IRRADIANCE:
+                continue
+            suffix = configured.rom.hex().upper()
+            defaults = {
+                f"{DS2438_SOLAR_MULTIPLIER_PREFIX}{suffix}": SOLAR_MULTIPLIER_UNASSIGNED,
+                f"{DS2438_SOLAR_OFFSET_PREFIX}{suffix}": "0",
+            }
+            for key, value in defaults.items():
+                if key in values:
+                    continue
+                try:
+                    self._custom[key] = value
+                except Exception as exc:
+                    errors.append(f"{key}: {type(exc).__name__}: {exc}")
+                    continue
+                values[key] = value
+                changed = True
         if errors:
             self._interface.Notices[DS2438_APPLICATION_NOTICE_KEY] = json.dumps(
                 {

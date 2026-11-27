@@ -111,6 +111,15 @@ class StatefulDs2438Wire:
 
 
 class Ds2438TransportTests(unittest.TestCase):
+    def test_low_solar_vad_uses_the_existing_conversion_sequence(self) -> None:
+        wire = StatefulDs2438Wire(vad_raw=74, vdd_raw=497)
+
+        result = Ds2438Transport(object(), wire=wire).read_measurements(ROM)  # type: ignore[arg-type]
+
+        self.assertEqual(result.vad_volts, 0.74)
+        self.assertEqual(result.vdd_volts, 4.97)
+        self.assertEqual(wire.selections, ["vad", "vdd"])
+
     def test_stateful_model_proves_distinct_vad_vdd_selection_and_ram_restore(self) -> None:
         wire = StatefulDs2438Wire()
 

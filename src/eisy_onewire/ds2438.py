@@ -82,9 +82,9 @@ def decode_voltage(page: bytes) -> float:
 def validate_voltage_pair(vad: float, vdd: float) -> None:
     if not 2.4 <= vdd <= 10.0:
         raise Ds2438RangeError("DS2438 VDD is outside the documented 2.4-10.0 V range")
-    if not 1.5 <= vad <= 10.0 or vad > 2.0 * vdd:
+    if not 0.0 <= vad <= 10.0 or vad > 2.0 * vdd:
         raise Ds2438RangeError(
-            "DS2438 VAD is outside the documented 1.5-10.0 V and 2*VDD limits"
+            "DS2438 VAD is outside the documented 0-10.0 V conversion and 2*VDD limits"
         )
 
 

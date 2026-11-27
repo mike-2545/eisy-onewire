@@ -141,7 +141,10 @@ class PluginEntrypointTests(unittest.TestCase):
                         CUSTOMPARAMS = 7
 
                         def __init__(self, node_classes):
-                            if [node.id for node in node_classes] != ["onewire_controller", "ds18b20", "ds2438_hih4000"]:
+                            if [node.id for node in node_classes] != [
+                                "onewire_controller", "ds18b20", "ds2438_hih4000",
+                                "ds2438_analog_voltage", "ds2438_solar_irradiance",
+                            ]:
                                 raise AssertionError("entry point did not register generic node classes")
                             self.Notices = _Notices()
                             self.nodes = {}
@@ -181,9 +184,9 @@ class PluginEntrypointTests(unittest.TestCase):
                         def updateJsonProfile(self, profile, options=None):
                             if options != {"waitResponse": True}:
                                 raise AssertionError("profile update did not wait for response")
-                            if [item["id"] for item in profile["editors"]] != ["temperature", "reading_current", "refresh_interval", "temperature_unit", "decimal_precision", "relative_humidity"]:
+                            if [item["id"] for item in profile["editors"]] != ["temperature", "reading_current", "refresh_interval", "temperature_unit", "decimal_precision", "relative_humidity", "analog_voltage", "solar_irradiance"]:
                                 raise AssertionError("unexpected profile editors")
-                            if [item["id"] for item in profile["nodedefs"]] != ["onewire_controller", "ds18b20", "ds2438_hih4000"]:
+                            if [item["id"] for item in profile["nodedefs"]] != ["onewire_controller", "ds18b20", "ds2438_hih4000", "ds2438_analog_voltage", "ds2438_solar_irradiance"]:
                                 raise AssertionError("unexpected node definitions")
                             if any("ranges" not in item or "uom" in item for item in profile["editors"]):
                                 raise AssertionError("editors do not use runtime ranges")

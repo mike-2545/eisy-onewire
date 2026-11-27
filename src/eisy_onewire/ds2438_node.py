@@ -53,6 +53,7 @@ def create_ds2438_node_class(
 
     class Ds2438Hih4000Node(node_base):  # type: ignore[misc, valid-type]
         id = NODE_DEFINITION_ID
+        application = "hih4000"
         drivers = [
             {"driver": AVAILABILITY_DRIVER, "value": 0, "uom": UOM_BOOLEAN},
             {"driver": REFRESH_INTERVAL_DRIVER, "value": 0, "uom": UOM_INDEX},

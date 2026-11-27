@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eisy-onewire"
-version = "0.3.16"
-description = "Generic 1-Wire controller with DS18B20 and identified HIH-4000 support"
+version = "0.3.17"
+description = "Native eisy 1-Wire controller with temperature, humidity, and analog applications"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Mike" }]

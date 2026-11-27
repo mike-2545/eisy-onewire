@@ -87,6 +87,14 @@ _RUNTIME_PROFILE: dict[str, Any] = {
                 }
             ],
         },
+        {
+            "id": "analog_voltage",
+            "ranges": [{"uom": "72", "prec": 2, "step": 0.01, "min": 0, "max": 10}],
+        },
+        {
+            "id": "solar_irradiance",
+            "ranges": [{"uom": "74", "prec": 1, "step": 0.1, "min": -5000, "max": 5000}],
+        },
     ],
     "linkdefs": [],
     "nodedefs": [
@@ -220,6 +228,54 @@ _RUNTIME_PROFILE: dict[str, Any] = {
                         "native": "false",
                         "name": "Refresh Temperature and Humidity",
                     },
+                    {"id": "REFRESH_OFF", "native": "false", "name": "Refresh Off"},
+                    {"id": "REFRESH_30", "native": "false", "name": "Refresh 30 sec"},
+                    {"id": "REFRESH_60", "native": "false", "name": "Refresh 60 sec"},
+                    {"id": "REFRESH_120", "native": "false", "name": "Refresh 120 sec"},
+                    {"id": "REFRESH_300", "native": "false", "name": "Refresh 300 sec"},
+                ],
+            },
+            "links": {"ctl": [], "rsp": []},
+        },
+        {
+            "id": "ds2438_analog_voltage",
+            "nls": "DS2438_ANALOG_VOLTAGE",
+            "icon": "Electricity",
+            "name": "1-Wire Analog Voltage Sensor",
+            "properties": [
+                {"id": "ST", "editor": "analog_voltage", "name": "Analog Input Voltage"},
+                {"id": "GV0", "editor": "reading_current", "name": "Current Reading Valid"},
+                {"id": "GV1", "editor": "refresh_interval", "name": "Desired Refresh Interval"},
+                {"id": "GV2", "editor": "analog_voltage", "name": "Supply Voltage"},
+            ],
+            "cmds": {
+                "sends": [],
+                "accepts": [
+                    {"id": "REFRESH", "native": "false", "name": "Refresh Analog Voltages"},
+                    {"id": "REFRESH_OFF", "native": "false", "name": "Refresh Off"},
+                    {"id": "REFRESH_30", "native": "false", "name": "Refresh 30 sec"},
+                    {"id": "REFRESH_60", "native": "false", "name": "Refresh 60 sec"},
+                    {"id": "REFRESH_120", "native": "false", "name": "Refresh 120 sec"},
+                    {"id": "REFRESH_300", "native": "false", "name": "Refresh 300 sec"},
+                ],
+            },
+            "links": {"ctl": [], "rsp": []},
+        },
+        {
+            "id": "ds2438_solar_irradiance",
+            "nls": "DS2438_SOLAR_IRRADIANCE",
+            "icon": "Sun",
+            "name": "1-Wire Solar Irradiance Sensor",
+            "properties": [
+                {"id": "ST", "editor": "solar_irradiance", "name": "Solar Irradiance"},
+                {"id": "GV0", "editor": "reading_current", "name": "Current Reading Valid"},
+                {"id": "GV1", "editor": "refresh_interval", "name": "Desired Refresh Interval"},
+                {"id": "GV2", "editor": "analog_voltage", "name": "Raw Analog Input Voltage"},
+            ],
+            "cmds": {
+                "sends": [],
+                "accepts": [
+                    {"id": "REFRESH", "native": "false", "name": "Refresh Solar Irradiance"},
                     {"id": "REFRESH_OFF", "native": "false", "name": "Refresh Off"},
                     {"id": "REFRESH_30", "native": "false", "name": "Refresh 30 sec"},
                     {"id": "REFRESH_60", "native": "false", "name": "Refresh 60 sec"},

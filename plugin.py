@@ -15,8 +15,13 @@ from eisy_onewire.inventory_evidence import installed_evidence_path  # noqa: E40
 from eisy_onewire.controller_node import create_controller_node_class  # noqa: E402
 from eisy_onewire.ds18b20_node import create_ds18b20_node_class  # noqa: E402
 from eisy_onewire.ds2438_node import create_ds2438_node_class  # noqa: E402
+from eisy_onewire.ds2438_analog_node import (  # noqa: E402
+    create_ds2438_analog_node_class,
+    create_ds2438_solar_node_class,
+)
 from eisy_onewire.node_registry import OneWireNodeRegistry  # noqa: E402
 from eisy_onewire.sensor_config import load_default_parameters  # noqa: E402
+from eisy_onewire.sensor_config import Ds2438Application  # noqa: E402
 from eisy_onewire.usb_detector import DetectionStatus  # noqa: E402
 from eisy_onewire.version import PLUGIN_VERSION  # noqa: E402
 
@@ -34,7 +39,15 @@ def main() -> None:
         udi_interface.Node,
         logger=udi_interface.LOGGER,
     )
-    interface = udi_interface.Interface([controller_node, sensor_node, ds2438_node])
+    ds2438_analog_node = create_ds2438_analog_node_class(
+        udi_interface.Node, logger=udi_interface.LOGGER
+    )
+    ds2438_solar_node = create_ds2438_solar_node_class(
+        udi_interface.Node, logger=udi_interface.LOGGER
+    )
+    interface = udi_interface.Interface(
+        [controller_node, sensor_node, ds2438_node, ds2438_analog_node, ds2438_solar_node]
+    )
     custom_parameters = udi_interface.Custom(interface, "customparams")
     custom_data = udi_interface.Custom(interface, "customdata")
     registry = OneWireNodeRegistry(
@@ -46,6 +59,11 @@ def main() -> None:
         controller_node,
         sensor_node,
         ds2438_sensor_class=ds2438_node,
+        ds2438_sensor_classes={
+            Ds2438Application.HIH4000: ds2438_node,
+            Ds2438Application.ANALOG_VOLTAGE: ds2438_analog_node,
+            Ds2438Application.SOLAR_IRRADIANCE: ds2438_solar_node,
+        },
         inventory_evidence_path=installed_evidence_path(),
         presentation_profile_updater=lambda presentation: synchronize_json_profile(
             interface, build_runtime_json_profile(presentation)

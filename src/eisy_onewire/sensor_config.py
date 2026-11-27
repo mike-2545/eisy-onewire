@@ -11,6 +11,11 @@ from pathlib import Path
 from .ds18b20 import InvalidRomError, parse_ds18b20_rom
 from .ds2438 import parse_ds2438_rom
 from .node_identity import DEFAULT_ADAPTER_NAMESPACE, sensor_address
+from .ds2438_analog import (
+    Ds2438AnalogError,
+    SOLAR_MULTIPLIER_UNASSIGNED,
+    SolarCalibration,
+)
 
 
 CONFIG_VERSION_KEY = "_config_version"
@@ -20,6 +25,8 @@ DS2409_BRANCH_READ_EVENT_POLICY_KEY = "_ds2409_branch_read_event_flag_policy"
 DS2409_UNATTENDED_BRANCH_POLICY_KEY = "_ds2409_unattended_branch_access_policy"
 MAX_FRIENDLY_NAME_LENGTH = 64
 DS2438_APPLICATION_PREFIX = "_ds2438_application_"
+DS2438_SOLAR_MULTIPLIER_PREFIX = "_ds2438_solar_multiplier_"
+DS2438_SOLAR_OFFSET_PREFIX = "_ds2438_solar_offset_"
 
 
 class SensorConfigurationError(ValueError):
@@ -44,6 +51,8 @@ class Ds2438Application(str, Enum):
 
     UNASSIGNED = "unassigned"
     HIH4000 = "hih4000"
+    ANALOG_VOLTAGE = "analog_voltage"
+    SOLAR_IRRADIANCE = "solar_irradiance"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +67,8 @@ class ConfiguredDs2438:
     rom: bytes
     address: str
     application: Ds2438Application
+    solar_calibration: SolarCalibration | None = None
+    application_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,21 +233,56 @@ def parse_ds2438_applications(
         except ValueError as exc:
             raise SensorConfigurationError(
                 f"DS2438 application for {rom_text.upper()} must be one of: "
-                "unassigned, hih4000"
+                "unassigned, hih4000, analog_voltage, solar_irradiance"
             ) from exc
         if rom in seen:
             raise SensorConfigurationError(
                 f"duplicate DS2438 application for {rom_text.upper()}"
             )
         seen.add(rom)
+        calibration: SolarCalibration | None = None
+        application_error: str | None = None
+        if application is Ds2438Application.SOLAR_IRRADIANCE:
+            suffix = rom.hex().upper()
+            multiplier_key = f"{DS2438_SOLAR_MULTIPLIER_PREFIX}{suffix}"
+            offset_key = f"{DS2438_SOLAR_OFFSET_PREFIX}{suffix}"
+            multiplier = _case_insensitive_parameter(
+                parameters, multiplier_key, SOLAR_MULTIPLIER_UNASSIGNED
+            )
+            offset = _case_insensitive_parameter(parameters, offset_key, "0")
+            if (
+                not isinstance(multiplier, str)
+                or multiplier.strip().lower() == SOLAR_MULTIPLIER_UNASSIGNED
+            ):
+                application_error = (
+                    f"{multiplier_key} must be an explicit positive W/m2/V value"
+                )
+            else:
+                try:
+                    calibration = SolarCalibration(multiplier, offset)
+                except (Ds2438AnalogError, TypeError, ValueError) as exc:
+                    application_error = f"invalid solar calibration for {rom_text.upper()}: {exc}"
         configured.append(
             ConfiguredDs2438(
                 rom,
                 sensor_address(rom, adapter_namespace),
                 application,
+                calibration,
+                application_error,
             )
         )
     return tuple(sorted(configured, key=lambda item: item.address))
+
+
+def _case_insensitive_parameter(
+    parameters: Mapping[str, object], key: str, default: object
+) -> object:
+    folded = key.casefold()
+    matches = [value for candidate, value in parameters.items()
+               if isinstance(candidate, str) and candidate.casefold() == folded]
+    if len(matches) > 1:
+        raise SensorConfigurationError(f"duplicate parameter {key}")
+    return matches[0] if matches else default
 
 
 def parse_ds2409_event_flag_policy(

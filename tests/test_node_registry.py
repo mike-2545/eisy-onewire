@@ -25,10 +25,12 @@ from eisy_onewire.node_registry import (
     DISCOVERY_NOTICE_KEY,
     DS2409_STATUS_NOTICE_KEY,
     DS2438_APPLICATION_NOTICE_KEY,
+    DS2438_TRANSITION_NOTICE_KEY,
     FRIENDLY_NAME_NOTICE_KEY,
     OneWireNodeRegistry,
     TEMPERATURE_PRESENTATION_NOTICE_KEY,
 )
+from eisy_onewire.sensor_config import Ds2438Application
 from eisy_onewire.onewire_discovery import (
     DiscoveryReport,
     InvalidRom,
@@ -176,6 +178,13 @@ class Sensor:
     def set_temperature_presentation(self, presentation) -> None:
         self.temperature_presentation = presentation
 
+    def set_application_authorized(self, authorized) -> None:
+        self.application_authorized = authorized
+
+    def set_calibration(self, calibration, error) -> None:
+        self.calibration = calibration
+        self.configuration_error = error
+
     def rename(self, name) -> None:
         self.renames = getattr(self, "renames", []) + [name]
         self.name = name
@@ -191,6 +200,14 @@ class Sensor:
 
     def last_refresh_error(self):
         return None
+
+
+class AnalogSensor(Sensor):
+    application = "analog_voltage"
+
+
+class SolarSensor(Sensor):
+    application = "solar_irradiance"
 
 
 class SchedulerFactory:
@@ -309,6 +326,7 @@ class NodeRegistryTests(unittest.TestCase):
         presentation_profile_updater=None,
         presentation_worker_factory=ImmediatePresentationWorker,
         ds2438_sensor_class=None,
+        ds2438_sensor_classes=None,
     ):
         interface = FakeInterface(database_names)
         params = FakeCustom()
@@ -325,6 +343,7 @@ class NodeRegistryTests(unittest.TestCase):
             Controller,
             Sensor,
             ds2438_sensor_class=ds2438_sensor_class,
+            ds2438_sensor_classes=ds2438_sensor_classes,
             discovery_factory=factory,
             status_factory=(status_factory or StatusFactory(RuntimeError("unused"))),
             scheduler_factory=scheduler,
@@ -1087,6 +1106,89 @@ class NodeRegistryTests(unittest.TestCase):
         restarted.activate(adapter_accessible=True)
         self.assertEqual(restarted_params.values[key], "unassigned")
         self.assertEqual(restarted_factory.calls, 0)
+
+    def test_solar_selection_populates_calibration_without_usb_and_stays_unscheduled(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        registry, interface, params, _, factory, _ = self.make_registry(
+            report(ds2438),
+            ds2438_sensor_classes={
+                Ds2438Application.SOLAR_IRRADIANCE: SolarSensor,
+            },
+        )
+        self.ready(registry)
+        self.assertTrue(registry.discover_devices())
+        calls = factory.calls
+
+        registry.handle_custom_parameters(
+            {
+                "_config_version": "1",
+                "_ds2438_application_2666778899AABB54": "solar_irradiance",
+            }
+        )
+
+        self.assertEqual(
+            params.values["_ds2438_solar_multiplier_2666778899AABB54"],
+            "unassigned",
+        )
+        self.assertEqual(params.values["_ds2438_solar_offset_2666778899AABB54"], "0")
+        self.assertEqual(factory.calls, calls)
+        node = next(node for node, _ in interface.added if node.address == "2666778899aabb")
+        self.assertIn("positive W/m2/V", node.configuration_error)
+        targets = registry.test_scheduler_factory.configurations[-1]["targets"]
+        self.assertFalse(any(target.rom == ds2438 for target in targets))
+
+    def test_valid_solar_calibration_is_preserved_and_scheduled_by_existing_policy(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        registry, interface, params, _, _, _ = self.make_registry(
+            report(ds2438),
+            ds2438_sensor_classes={
+                Ds2438Application.SOLAR_IRRADIANCE: SolarSensor,
+            },
+        )
+        registry.handle_custom_parameters(
+            {
+                "_config_version": "1",
+                "_ds2438_application_2666778899AABB54": "solar_irradiance",
+                "_ds2438_solar_multiplier_2666778899AABB54": "250",
+                "_ds2438_solar_offset_2666778899AABB54": "-1.5",
+            }
+        )
+        registry.handle_custom_data({})
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(registry.discover_devices())
+
+        node = next(node for node, _ in interface.added if node.address == "2666778899aabb")
+        self.assertEqual(node.calibration.multiplier_w_m2_per_volt, 250)
+        self.assertEqual(node.calibration.offset_w_m2, -1.5)
+        self.assertEqual(params.values["_ds2438_solar_multiplier_2666778899AABB54"], "250")
+
+    def test_existing_node_definition_transition_is_non_destructive_and_fail_closed(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        registry, interface, _, _, _, _ = self.make_registry(
+            report(ds2438),
+            ds2438_sensor_class=Sensor,
+            ds2438_sensor_classes={Ds2438Application.ANALOG_VOLTAGE: AnalogSensor},
+        )
+        registry.handle_custom_parameters({
+            "_config_version": "1",
+            "_ds2438_application_2666778899AABB54": "hih4000",
+        })
+        registry.handle_custom_data({})
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(registry.discover_devices())
+        node = next(node for node, _ in interface.added if node.address == "2666778899aabb")
+
+        registry.handle_custom_parameters({
+            "_config_version": "1",
+            "_ds2438_application_2666778899AABB54": "analog_voltage",
+        })
+
+        self.assertFalse(node.application_authorized)
+        self.assertIn(DS2438_TRANSITION_NOTICE_KEY, interface.Notices)
+        self.assertEqual(
+            len([item for item, _ in interface.added if item.address == "2666778899aabb"]),
+            1,
+        )
 
     def test_application_parameter_write_failure_remains_inventory_only(self) -> None:
         ds2438 = bytes.fromhex("2666778899AABB54")

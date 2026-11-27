@@ -71,6 +71,10 @@ from eisy_onewire.presentation_worker import (
 from eisy_onewire.ds2438_humidity import Hih4000Reading
 from eisy_onewire.ds2438_node import create_ds2438_node_class
 from eisy_onewire.ds2438_service import Ds2438Acquisition
+from eisy_onewire.ds2438_service import Ds2438RawAcquisition
+from eisy_onewire.ds2438 import Ds2438Measurement
+from eisy_onewire.ds2438_analog import SolarCalibration
+from eisy_onewire.ds2438_analog_node import create_ds2438_solar_node_class
 
 ROM = bytes.fromhex("2811223344556656")
 ADDRESS = "28112233445566"
@@ -1128,6 +1132,41 @@ class UdiInterfaceContractTests(unittest.TestCase):
         self.assertEqual(by_driver["ST"]["value"], 75.0)
         self.assertEqual(by_driver["GV2"]["value"], 35.4)
         self.assertEqual(by_driver["GV2"]["uom"], 51)
+
+    def test_actual_ds2438_solar_command_contract_uses_official_uoms(self) -> None:
+        sensor_rom = bytes.fromhex("2666778899AABB54")
+
+        class Service:
+            calls = []
+            def read(self, rom):
+                self.calls.append(rom)
+                return Ds2438RawAcquisition(
+                    Ds2438Measurement(rom, 18.0, 64.4, 0.74, 4.97)
+                )
+
+        service = Service()
+        cls = create_ds2438_solar_node_class(
+            udi_interface.Node,
+            logger=Logger(),
+            root_service_factory=lambda: service,
+        )
+        polyglot = RealNodePolyglotHarness()
+        node = cls(
+            polyglot,
+            primary="onewire",
+            address="2666778899aabb",
+            name="Solar",
+            rom=sensor_rom,
+            adapter_lock=threading.Lock(),
+            calibration=SolarCalibration(250),
+        )
+
+        node.runCmd({"cmd": "REFRESH"})
+
+        self.assertEqual(service.calls, [sensor_rom])
+        by_driver = {item["driver"]: item for item in polyglot.added[0]}
+        self.assertEqual((by_driver["ST"]["value"], by_driver["ST"]["uom"]), (185.0, 74))
+        self.assertEqual((by_driver["GV2"]["value"], by_driver["GV2"]["uom"]), (0.74, 72))
 
 
 if __name__ == "__main__":

@@ -45,6 +45,41 @@ class SensorConfigTests(unittest.TestCase):
         )
         self.assertEqual(unassigned[0].application.value, "unassigned")
 
+    def test_analog_and_solar_applications_require_only_relevant_calibration(self) -> None:
+        analog = parse_ds2438_applications(
+            {"_ds2438_application_2666778899AABB54": "analog_voltage"}
+        )[0]
+        self.assertEqual(analog.application.value, "analog_voltage")
+        self.assertIsNone(analog.application_error)
+
+        missing = parse_ds2438_applications(
+            {"_ds2438_application_2666778899AABB54": "solar_irradiance"}
+        )[0]
+        self.assertIsNone(missing.solar_calibration)
+        self.assertIn("positive W/m2/V", missing.application_error)
+
+        calibrated = parse_ds2438_applications(
+            {
+                "_ds2438_application_2666778899aabb54": "solar_irradiance",
+                "_ds2438_solar_multiplier_2666778899AABB54": "250",
+                "_ds2438_solar_offset_2666778899AABB54": "-1.5",
+            }
+        )[0]
+        self.assertEqual(calibrated.solar_calibration.multiplier_w_m2_per_volt, 250)
+        self.assertEqual(calibrated.solar_calibration.offset_w_m2, -1.5)
+
+        # Invalid solar calibration is isolated to that device rather than
+        # invalidating an unrelated, explicitly selected analog sensor.
+        mixed = parse_ds2438_applications(
+            {
+                "_ds2438_application_2666778899AABB54": "solar_irradiance",
+                "_ds2438_solar_multiplier_2666778899AABB54": "bad",
+                "_ds2438_application_2655443322110061": "analog_voltage",
+            }
+        )
+        self.assertEqual(len(mixed), 2)
+        self.assertEqual(sum(item.application_error is not None for item in mixed), 1)
+
     def test_optional_names_accept_both_supported_families_and_isolate_errors(self) -> None:
         ds2438 = bytes.fromhex("2666778899AABB54")
         previous, errors = parse_friendly_name_overrides(

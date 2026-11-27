@@ -116,9 +116,9 @@ class IoxProfileTests(unittest.TestCase):
         self.assertEqual(self.profile["linkdefs"], [])
         self.assertEqual(
             [node["id"] for node in self.profile["nodedefs"]],
-            ["onewire_controller", "ds18b20", "ds2438_hih4000"],
+            ["onewire_controller", "ds18b20", "ds2438_hih4000", "ds2438_analog_voltage", "ds2438_solar_irradiance"],
         )
-        controller, node, humidity_node = self.profile["nodedefs"]
+        controller, node, humidity_node, analog_node, solar_node = self.profile["nodedefs"]
         self.assertEqual(controller["properties"][0]["editor"], "reading_current")
         self.assertEqual(
             [item["id"] for item in controller["cmds"]["accepts"]],
@@ -138,6 +138,10 @@ class IoxProfileTests(unittest.TestCase):
         self.assertEqual(humidity_properties["GV2"]["editor"], "relative_humidity")
         self.assertEqual(editors["relative_humidity"]["ranges"][0]["uom"], "51")
         self.assertEqual(editors["relative_humidity"]["ranges"][0]["prec"], 1)
+        self.assertEqual(editors["analog_voltage"]["ranges"][0]["uom"], "72")
+        self.assertEqual(editors["solar_irradiance"]["ranges"][0]["uom"], "74")
+        self.assertEqual(analog_node["properties"][0]["editor"], "analog_voltage")
+        self.assertEqual(solar_node["properties"][0]["editor"], "solar_irradiance")
 
     def test_runtime_profile_is_not_local_store_metadata_shape(self) -> None:
         metadata = json.loads(

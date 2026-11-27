@@ -1,6 +1,6 @@
 # eisy-onewire configuration reference
 
-Version 0.3.16 uses the supported eisy-ui plugin configuration and IoX command
+Version 0.3.17 uses the supported eisy-ui plugin configuration and IoX command
 interfaces. Most users can discover sensors, rename nodes, select intervals,
 and change temperature presentation without typing a ROM.
 
@@ -40,7 +40,7 @@ or previously cached name. A newly added or changed valid override deliberately
 renames the node once; an unchanged override and unrelated configuration saves
 do not rename it.
 
-## DS2438/HIH-4000 application
+## DS2438 applications
 
 A discovered family-`0x26` device automatically receives a safe selector:
 
@@ -56,8 +56,26 @@ _ds2438_application_<complete-CRC-valid-ROM>=hih4000
 ```
 
 Do not select `hih4000` based only on the family code or voltage values.
-The plugin does not support arbitrary DS2438 analog circuits and never writes
-DS2438 EEPROM. A configured node starts stale with interval Off.
+Additional explicit choices are `analog_voltage` and `solar_irradiance`.
+Generic analog nodes expose VAD and VDD without applying humidity limits.
+Selecting `solar_irradiance` automatically creates only these device-specific
+fields:
+
+```text
+_ds2438_solar_multiplier_<complete-ROM>=unassigned
+_ds2438_solar_offset_<complete-ROM>=0
+```
+
+Set the multiplier in W/m² per volt before any solar acquisition is eligible.
+The offset is in W/m². Saving these fields performs no USB operation. Missing
+or invalid calibration disables only that device and raises a Notice. The
+plugin never infers an application and never writes DS2438 EEPROM.
+Every newly configured DS2438 node starts with interval Off.
+
+An already registered DS2438 cannot safely change to a different IoX node
+definition in place. Such a transition is rejected non-destructively and
+requires a separately reviewed migration; the plugin never deletes/recreates
+the node automatically.
 Changing an existing selector back to `unassigned` immediately revokes manual
 and scheduled acquisition. The stable node may remain visible with cached
 values marked stale; this avoids destructive IoX node deletion.
