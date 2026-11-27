@@ -19,6 +19,14 @@ from eisy_onewire.status_diagnostic import (
     parse_adapter_status,
 )
 
+ADAPTER_ROM = "814455667788999C"
+
+
+class ImmediateAccess:
+    def run(self, expected, operation):
+        self.expected = expected
+        return operation(object(), object())
+
 
 def valid_status(*, results: bytes = b"") -> bytes:
     packet = bytearray(16)
@@ -175,8 +183,9 @@ class StatusDiagnosticTests(unittest.TestCase):
                 return Ds2490StatusDiagnostic(RecordingFactory(context)).run()
 
         code = main(
-            ["adapter-status"],
-            diagnostic_factory=Diagnostic,
+            ["adapter-status", "--adapter-rom", ADAPTER_ROM],
+            diagnostic_factory=lambda _binding: Diagnostic(),
+            access_factory=ImmediateAccess,
             output=output,
         )
 
@@ -192,8 +201,9 @@ class StatusDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
         error_output = io.StringIO()
         code = main(
-            ["adapter-status"],
-            diagnostic_factory=FailingDiagnostic,
+            ["adapter-status", "--adapter-rom", ADAPTER_ROM],
+            diagnostic_factory=lambda _binding: FailingDiagnostic(),
+            access_factory=ImmediateAccess,
             output=output,
             error_output=error_output,
         )

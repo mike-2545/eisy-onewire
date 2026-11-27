@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import unittest
 
 from eisy_onewire.ds2490_transport import (
@@ -22,6 +23,7 @@ from eisy_onewire.ds2490_transport import (
     MODE_WRITE1_LOW_TIME,
     ONEWIRE_SPEED_FLEXIBLE,
     CtypesLibUsbSessionFactory,
+    PersistentCtypesLibUsbSessionFactory,
     Ds2490Adapter,
     Ds2490ProtocolError,
     Ds2490Transport,
@@ -29,8 +31,10 @@ from eisy_onewire.ds2490_transport import (
     RESULT_NO_RESPONSE,
     RESULT_SHORT,
     SEARCH_ROM,
+    SEARCH_SESSION_POLICY,
     SearchLimitExceeded,
     AdapterNotFoundError,
+    AdapterSelectionAmbiguousError,
     UsbPermissionError,
     UsbInterfaceBusyError,
     UsbConfigurationError,
@@ -40,6 +44,13 @@ from eisy_onewire.ds2490_transport import (
     _NativeUsbSession,
     _check_operation,
     _check_transfer,
+)
+from eisy_onewire.usb_detector import (
+    DS9490_PRODUCT_ID,
+    DS9490_VENDOR_ID,
+    UsbDeviceSelector,
+    UsbDeviceDescriptor,
+    _LibUsbDeviceDescriptor,
 )
 
 
@@ -174,7 +185,259 @@ class FakeTransferLibrary:
         return -99
 
 
+class FakeRetainedTransferLibrary(FakeOpenLibrary):
+    def __init__(self, *, transfer_result: int = 0, transferred: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self.transfer_result = transfer_result
+        self.transferred = transferred
+
+    def libusb_control_transfer(self, *args) -> int:
+        self.calls.append(("control_transfer",))
+        return self.transfer_result
+
+    def libusb_bulk_transfer(
+        self, handle, endpoint, buffer, length, transferred, timeout
+    ) -> int:
+        self.calls.append(("bulk_transfer", endpoint, length))
+        transferred._obj.value = self.transferred
+        return self.transfer_result
+
+    def libusb_interrupt_transfer(
+        self, handle, endpoint, buffer, length, transferred, timeout
+    ) -> int:
+        self.calls.append(("interrupt_transfer", endpoint, length))
+        transferred._obj.value = self.transferred
+        return self.transfer_result
+
+
+class FakeEnumerationLibrary:
+    def __init__(self, addresses: list[int]) -> None:
+        self.addresses = addresses
+        self.open_calls: list[int] = []
+        self._array = (ctypes.c_void_p * max(1, len(addresses)))(
+            *(index + 1 for index in range(len(addresses)))
+        )
+
+    def libusb_get_device_list(self, context, output) -> int:
+        pointer = ctypes.cast(self._array, ctypes.POINTER(ctypes.c_void_p))
+        ctypes.cast(output, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0] = pointer
+        return len(self.addresses)
+
+    def libusb_free_device_list(self, devices, unref) -> None:
+        pass
+
+    def libusb_get_device_descriptor(self, device, output) -> int:
+        descriptor = ctypes.cast(output, ctypes.POINTER(_LibUsbDeviceDescriptor))[0]
+        descriptor.idVendor = DS9490_VENDOR_ID
+        descriptor.idProduct = DS9490_PRODUCT_ID
+        descriptor.bNumConfigurations = 1
+        return 0
+
+    def libusb_get_bus_number(self, device) -> int:
+        return 1
+
+    def libusb_get_device_address(self, device) -> int:
+        return self.addresses[int(device) - 1]
+
+    def libusb_get_port_numbers(self, device, buffer, length) -> int:
+        buffer[0] = int(device)
+        return 1
+
+    def libusb_open(self, device, output) -> int:
+        self.open_calls.append(int(device))
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = 100 + int(device)
+        return 0
+
+
 class Ds2490TransportTests(unittest.TestCase):
+    def test_persistent_factory_reuses_only_retained_handle(self) -> None:
+        library = FakeOpenLibrary()
+        location = UsbDeviceDescriptor(
+            0x110, 0, 0, 0, 8, DS9490_VENDOR_ID, DS9490_PRODUCT_ID,
+            2, 1, 0, 4, (2, 1),
+        )
+        factory = PersistentCtypesLibUsbSessionFactory(
+            library, ctypes.c_void_p(1), "accepted-handle", location
+        )
+
+        with factory.open():
+            pass
+
+        self.assertIn(("claim", "accepted-handle", 0), library.calls)
+        self.assertNotIn(("close", "accepted-handle"), library.calls)
+        factory.close()
+        self.assertIn(("close", "accepted-handle"), library.calls)
+        self.assertIn(("exit",), library.calls)
+
+    def test_persistent_factory_disconnect_invalidates_binding(self) -> None:
+        library = FakeOpenLibrary()
+        library.configuration = 1
+        location = UsbDeviceDescriptor(
+            0x110, 0, 0, 0, 8, DS9490_VENDOR_ID, DS9490_PRODUCT_ID,
+            2, 1, 0, 4, (2,),
+        )
+        factory = PersistentCtypesLibUsbSessionFactory(
+            library, ctypes.c_void_p(1), "accepted-handle", location
+        )
+        library.libusb_get_configuration = lambda handle, output: -4
+
+        with self.assertRaisesRegex(AdapterNotFoundError, "disconnected"):
+            factory.open()
+        self.assertFalse(factory.valid)
+        with self.assertRaisesRegex(AdapterNotFoundError, "stale"):
+            factory.open()
+
+    def test_every_negative_retained_handle_health_result_invalidates(self) -> None:
+        cases = (
+            (-11, UsbTransportError),  # observed on FreeBSD after disconnect
+            (-4, AdapterNotFoundError),
+            (-7, UsbTransferTimeout),
+            (-99, UsbTransportError),
+        )
+        for result, exception_type in cases:
+            with self.subTest(result=result):
+                library = FakeOpenLibrary()
+                location = UsbDeviceDescriptor(
+                    0x110, 0, 0, 0, 8, DS9490_VENDOR_ID, DS9490_PRODUCT_ID,
+                    2, 1, 0, 4, (2,),
+                )
+                factory = PersistentCtypesLibUsbSessionFactory(
+                    library,
+                    ctypes.c_void_p(1),
+                    "accepted-handle",
+                    location,
+                    policy=SEARCH_SESSION_POLICY,
+                )
+                library.libusb_get_configuration = lambda handle, output, value=result: value
+
+                with self.assertRaises(exception_type):
+                    factory.open()
+                self.assertFalse(factory.valid)
+
+    def test_negative_claim_alternate_and_release_results_invalidate_binding(self) -> None:
+        location = UsbDeviceDescriptor(
+            0x110, 0, 0, 0, 8, DS9490_VENDOR_ID, DS9490_PRODUCT_ID,
+            2, 1, 0, 4, (2,),
+        )
+        cases = (
+            ({"claim_result": -6}, UsbInterfaceBusyError),
+            ({"alternate_result": -11}, UsbTransportError),
+        )
+        for kwargs, exception_type in cases:
+            with self.subTest(kwargs=kwargs):
+                library = FakeOpenLibrary(**kwargs)
+                factory = PersistentCtypesLibUsbSessionFactory(
+                    library,
+                    ctypes.c_void_p(1),
+                    "accepted-handle",
+                    location,
+                    policy=SEARCH_SESSION_POLICY,
+                )
+                with self.assertRaises(exception_type):
+                    factory.open()
+                self.assertFalse(factory.valid)
+
+        library = FakeOpenLibrary(release_result=-11)
+        factory = PersistentCtypesLibUsbSessionFactory(
+            library, ctypes.c_void_p(1), "accepted-handle", location
+        )
+        with self.assertRaises(UsbTransportError):
+            with factory.open():
+                pass
+        self.assertFalse(factory.valid)
+
+    def test_negative_native_transfer_invalidates_retained_handle(self) -> None:
+        cases = (
+            (-4, AdapterNotFoundError),
+            (-7, UsbTransferTimeout),
+            (-11, UsbTransportError),
+            (-99, UsbTransportError),
+        )
+        for result, exception_type in cases:
+            with self.subTest(result=result):
+                library = FakeRetainedTransferLibrary(transfer_result=result)
+                invalidations = []
+                session = _NativeUsbSession(
+                    library,
+                    ctypes.c_void_p(1),
+                    "accepted-handle",
+                    owns_handle=False,
+                    handle_failed=lambda: invalidations.append(result),
+                )
+                with self.assertRaises(exception_type):
+                    session.bulk_in(8)
+                self.assertEqual(invalidations, [result])
+                session.close(suppress_release_error=True)
+
+    def test_sensor_level_protocol_failure_does_not_invalidate_handle(self) -> None:
+        library = FakeRetainedTransferLibrary(transfer_result=0, transferred=1)
+        invalidations = []
+        session = _NativeUsbSession(
+            library,
+            ctypes.c_void_p(1),
+            "accepted-handle",
+            owns_handle=False,
+            handle_failed=lambda: invalidations.append(True),
+        )
+
+        with self.assertRaisesRegex(Ds2490ProtocolError, "transferred 1 of 2"):
+            session.bulk_out(b"ab")
+
+        self.assertEqual(invalidations, [])
+        session.close()
+
+    def test_release_failure_invalidates_without_masking_primary_error(self) -> None:
+        library = FakeRetainedTransferLibrary(release_result=-11)
+        invalidations = []
+        session = _NativeUsbSession(
+            library,
+            ctypes.c_void_p(1),
+            "accepted-handle",
+            owns_handle=False,
+            handle_failed=lambda: invalidations.append(True),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "primary failure"):
+            with session:
+                raise RuntimeError("primary failure")
+
+        self.assertEqual(invalidations, [True])
+
+    def test_native_factory_rejects_multiple_adapters_without_opening(self) -> None:
+        for addresses in ([4, 5], [5, 4]):
+            library = FakeEnumerationLibrary(addresses)
+            factory = CtypesLibUsbSessionFactory(library)
+            with self.assertRaises(AdapterSelectionAmbiguousError):
+                factory._open_matching(ctypes.c_void_p(1))
+            self.assertEqual(library.open_calls, [])
+
+    def test_native_factory_reports_zero_adapters_without_opening(self) -> None:
+        library = FakeEnumerationLibrary([])
+        factory = CtypesLibUsbSessionFactory(library)
+        with self.assertRaisesRegex(AdapterNotFoundError, "no USB device matched"):
+            factory._open_matching(ctypes.c_void_p(1))
+        self.assertEqual(library.open_calls, [])
+
+    def test_explicit_selector_opens_only_selected_adapter(self) -> None:
+        library = FakeEnumerationLibrary([4, 5])
+        selector = UsbDeviceSelector(1, 5, (2,))
+        factory = CtypesLibUsbSessionFactory(library, selector=selector)
+
+        handle = factory._open_matching(ctypes.c_void_p(1))
+
+        self.assertEqual(handle.value, 102)
+        self.assertEqual(library.open_calls, [2])
+        self.assertEqual(factory.selected_descriptor.device_address, 5)
+
+    def test_selected_adapter_disconnect_does_not_fall_back(self) -> None:
+        library = FakeEnumerationLibrary([4])
+        factory = CtypesLibUsbSessionFactory(
+            library, selector=UsbDeviceSelector(1, 5)
+        )
+        with self.assertRaisesRegex(AdapterNotFoundError, "no longer present"):
+            factory._open_matching(ctypes.c_void_p(1))
+        self.assertEqual(library.open_calls, [])
+
     def test_initialization_and_multiple_rom_search_transactions(self) -> None:
         session = FakeSession()
         internal_id = bytes.fromhex("8194063200000014")

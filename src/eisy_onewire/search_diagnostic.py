@@ -7,6 +7,7 @@ import json
 import sys
 from typing import Callable, Sequence, TextIO
 
+from .adapter_binding import AdapterBindingError
 from .ds2490_transport import (
     MAX_SEARCH_DEVICES,
     Ds2490Adapter,
@@ -20,13 +21,18 @@ from .onewire_discovery import (
     discover_devices,
 )
 from .version import PLUGIN_VERSION
+from .diagnostic_access import (
+    DiagnosticAccessError,
+    VerifiedDiagnosticAccess,
+    parse_adapter_identity,
+)
 
 
 class Ds2490SearchDiagnostic:
     """Perform one initialization and one bounded Search Access command."""
 
-    def __init__(self, adapter: Ds2490Adapter | None = None) -> None:
-        self._adapter = adapter or Ds2490Adapter()
+    def __init__(self, adapter: Ds2490Adapter) -> None:
+        self._adapter = adapter
 
     def run(self) -> DiscoveryReport:
         return discover_devices(self._adapter, max_devices=MAX_SEARCH_DEVICES)
@@ -84,7 +90,12 @@ def diagnostic_report(report: DiscoveryReport) -> dict[str, object]:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    diagnostic_factory: Callable[[], Ds2490SearchDiagnostic] = Ds2490SearchDiagnostic,
+    diagnostic_factory: Callable[[Ds2490Adapter], Ds2490SearchDiagnostic] = (
+        Ds2490SearchDiagnostic
+    ),
+    access_factory: Callable[[], VerifiedDiagnosticAccess] = (
+        VerifiedDiagnosticAccess.native
+    ),
     output: TextIO = sys.stdout,
     error_output: TextIO = sys.stderr,
 ) -> int:
@@ -92,11 +103,28 @@ def main(
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("search-rom",))
+    parser.add_argument(
+        "--adapter-rom",
+        required=True,
+        help="accepted CRC-valid family-0x81 adapter ROM",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command != "search-rom":  # defensive; argparse enforces this
         return 2
     try:
-        rendered = diagnostic_report(diagnostic_factory().run())
+        expected = parse_adapter_identity(arguments.adapter_rom)
+        report = access_factory().run(
+            expected,
+            lambda binding, _inventory: diagnostic_factory(
+                Ds2490Adapter(binding)
+            ).run(),
+        )
+        rendered = diagnostic_report(report)
+        rendered["operation"]["identity_verification_searches"] = 1
+        rendered["operation"]["diagnostic_searches"] = 1
+        rendered["operation"]["total_searches"] = 2
+        rendered["operation"]["adapter_rom"] = expected.hex().upper()
+        rendered["operation"]["same_retained_handle"] = True
     except SearchLimitExceeded as exc:
         json.dump(
             {
@@ -113,7 +141,13 @@ def main(
         )
         error_output.write("\n")
         return 1
-    except (Ds2490Error, OSError) as exc:
+    except (
+        AdapterBindingError,
+        DiagnosticAccessError,
+        Ds2490Error,
+        OSError,
+        ValueError,
+    ) as exc:
         error = {
             "status": "error",
             "version": PLUGIN_VERSION,

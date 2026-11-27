@@ -2,7 +2,9 @@
 
 ## Before installing
 
-eisy-onewire 0.3.17 is a public beta for Universal Devices eisy. Confirm that:
+eisy-onewire 0.3.19 is a public beta for Universal Devices eisy. It preserves
+the identity-bound operation introduced in 0.3.18 and adds an explicit,
+default-off automatic recovery policy. Confirm that:
 
 - eisy-ui/PG3x and IoX are current;
 - a DS9490/DS9490R (USB VID `04fa`, PID `2490`) is attached;
@@ -32,9 +34,17 @@ The project is distributed under the MIT License. The archive includes both
 6. On a first installation, disconnect and reconnect the DS9490 once after the
    device rule is installed. This lets FreeBSD create a new device node with
    the intended ownership.
-7. Confirm **Adapter Accessible** is true. The normal startup detector opens and
+7. Confirm the startup detector reports one accessible adapter. It opens and
    immediately closes the adapter; it does not claim an interface or send a
-   1-Wire command.
+   1-Wire command. Ordinary access remains disarmed.
+8. With exactly the accepted adapter connected, click **Verify Adapter
+   Identity** once. Require a successful Notice containing the expected
+   family-`0x81` ROM before enabling the scheduler or refreshing a sensor.
+9. Optionally enable **Automatic Adapter Recovery** only after the accepted
+   identity is established. This authorizes one bounded root identity Search
+   ROM after startup or a supported reconnect event. The readiness window is
+   eight seconds; after it expires, verify manually. Recovery does not
+   authorize discovery or sensor measurements.
 
 ## Safe first-use sequence
 
@@ -73,6 +83,9 @@ Cached readings are intentionally restored with GV0 false until a fresh read.
 - Runtime profile synchronization was acknowledged.
 - Existing node addresses, names, and intervals are unchanged.
 - Automatic Refresh remains at the recorded state.
+- Automatic Adapter Recovery remains at the recorded state.
+- Adapter Accessible is true only after manual or authorized automatic
+  identity verification; descriptor accessibility alone is insufficient.
 - No unexpected discovery or branch operation appears in Notices/logs.
 - Other installed plugins remain healthy.
 

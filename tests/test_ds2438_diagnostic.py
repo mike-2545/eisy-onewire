@@ -4,9 +4,17 @@ import io
 import json
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
+from eisy_onewire.diagnostic_access import VerifiedDiagnosticAccess
 from eisy_onewire.branch_temperature import BranchEventPolicyError, BranchRestorationError
+from eisy_onewire.discovery_inventory import (
+    TOPOLOGY_SCOPE,
+    DiscoveryInventory,
+    KnownDevice,
+    LastScan,
+)
 from eisy_onewire.ds2409_transport import (
     BranchHop,
     Ds2409Branch,
@@ -22,10 +30,13 @@ from eisy_onewire.ds2438_diagnostic import (
     main,
     read_branch_ds2438,
 )
+from eisy_onewire.onewire_discovery import dallas_crc8
 
 
 SENSOR = bytes.fromhex("2666778899AABB54")
 ADAPTER = bytes.fromhex("814455667788999C")
+OTHER_ADAPTER_PREFIX = bytes.fromhex("81112233445566")
+OTHER_ADAPTER = OTHER_ADAPTER_PREFIX + bytes([dallas_crc8(OTHER_ADAPTER_PREFIX)])
 COUPLER = bytes.fromhex("1F5566778899AA38")
 TARGET = Ds2438BranchTarget(
     SENSOR,
@@ -88,9 +99,48 @@ class BusyLock:
         raise AssertionError("a lock that was not acquired must not be released")
 
 
-class NoOpenFactory:
+def inventory(adapter: bytes = ADAPTER) -> DiscoveryInventory:
+    return DiscoveryInventory(
+        (KnownDevice(adapter, "2026-11-22T12:00:00Z", "2026-11-22T12:00:00Z"),)
+    )
+
+
+def topology_inventory(*, sensor_adapter: bytes = ADAPTER) -> DiscoveryInventory:
+    timestamp = "2026-11-22T12:00:00Z"
+    hop = TARGET.path[0]
+    devices = (
+        KnownDevice(ADAPTER, timestamp, timestamp),
+        KnownDevice(COUPLER, timestamp, timestamp),
+        KnownDevice(SENSOR, timestamp, timestamp, sensor_adapter, (hop,)),
+    )
+    scan = LastScan(
+        timestamp,
+        TOPOLOGY_SCOPE,
+        tuple(item.rom.hex().upper() for item in devices),
+        True,
+        (),
+        ADAPTER.hex().upper(),
+        (hop.label,),
+    )
+    return DiscoveryInventory(devices, scan)
+
+
+class RecordingBinding:
+    def __init__(self, *, verify_error: Exception | None = None) -> None:
+        self.verify_error = verify_error
+        self.verify_calls: list[bytes] = []
+        self.closed = 0
+
+    def verify(self, expected: bytes) -> None:
+        self.verify_calls.append(expected)
+        if self.verify_error is not None:
+            raise self.verify_error
+
+    def close(self) -> None:
+        self.closed += 1
+
     def open(self):
-        raise AssertionError("libusb must not open while another process owns the lock")
+        raise AssertionError("native session must not open in this test")
 
 
 class RecordingLock:
@@ -105,11 +155,6 @@ class RecordingLock:
 
     def release(self) -> None:
         self.released = True
-
-
-class FailingOpenFactory:
-    def open(self):
-        raise RuntimeError("open failed")
 
 
 class Ds2438DiagnosticTests(unittest.TestCase):
@@ -172,19 +217,31 @@ class Ds2438DiagnosticTests(unittest.TestCase):
             read_branch_ds2438(TARGET, failed_restore, FakeReader())
 
     def test_cross_process_busy_result_prevents_libusb_open(self) -> None:
-        diagnostic = Ds2438BranchDiagnostic(
-            NoOpenFactory(), adapter_lock=BusyLock()  # type: ignore[arg-type]
+        binding = RecordingBinding()
+        access = VerifiedDiagnosticAccess(
+            BusyLock(),  # type: ignore[arg-type]
+            binding,  # type: ignore[arg-type]
+            Path("unused"),
+            lambda _path: inventory(),
         )
+        diagnostic = Ds2438BranchDiagnostic(access=access)
 
         with self.assertRaisesRegex(RuntimeError, "another diagnostic process"):
             diagnostic.read(REQUEST)
+        self.assertEqual(binding.verify_calls, [])
+        self.assertEqual(binding.closed, 0)
 
     def test_adapter_process_lock_is_released_when_native_open_fails(self) -> None:
         lock = RecordingLock()
+        binding = RecordingBinding(verify_error=RuntimeError("open failed"))
+        access = VerifiedDiagnosticAccess(
+            lock,  # type: ignore[arg-type]
+            binding,  # type: ignore[arg-type]
+            Path("unused"),
+            lambda _path: inventory(),
+        )
         diagnostic = Ds2438BranchDiagnostic(
-            FailingOpenFactory(),
-            adapter_lock=lock,  # type: ignore[arg-type]
-            inventory_loader=lambda _path: object(),  # type: ignore[arg-type]
+            access=access,
             target_validator=lambda _inventory, **_kwargs: (
                 TARGET.path[0],
                 TARGET.evidence_timestamp,
@@ -196,15 +253,16 @@ class Ds2438DiagnosticTests(unittest.TestCase):
 
         self.assertTrue(lock.released)
         self.assertEqual(lock.acquires, 1)
+        self.assertEqual(binding.closed, 1)
 
     def test_evidence_is_loaded_after_lock_and_changed_evidence_is_rejected(self) -> None:
         order: list[str] = []
-        state = {"inventory": "old"}
+        state = {"inventory": inventory()}
 
         class RaceLock(RecordingLock):
             def acquire(self, blocking: bool = True) -> bool:
                 order.append("acquire")
-                state["inventory"] = "changed"
+                state["inventory"] = inventory(OTHER_ADAPTER)
                 return super().acquire(blocking)
 
             def release(self) -> None:
@@ -217,23 +275,79 @@ class Ds2438DiagnosticTests(unittest.TestCase):
 
         def validate(inventory, **_kwargs):
             order.append("validate")
-            if inventory == "changed":
-                raise ValueError("topology changed before lock acquisition")
             return TARGET.path[0], TARGET.evidence_timestamp
 
         lock = RaceLock()
+        binding = RecordingBinding()
+        access = VerifiedDiagnosticAccess(
+            lock,  # type: ignore[arg-type]
+            binding,  # type: ignore[arg-type]
+            Path("unused"),
+            load,  # type: ignore[arg-type]
+        )
         diagnostic = Ds2438BranchDiagnostic(
-            NoOpenFactory(),
-            adapter_lock=lock,  # type: ignore[arg-type]
-            inventory_loader=load,  # type: ignore[arg-type]
+            access=access,
             target_validator=validate,
         )
 
-        with self.assertRaisesRegex(ValueError, "topology changed"):
+        with self.assertRaisesRegex(RuntimeError, "differs from accepted"):
             diagnostic.read(REQUEST)
 
-        self.assertEqual(order, ["acquire", "load", "validate", "release"])
+        self.assertEqual(order, ["acquire", "load", "release"])
         self.assertEqual(lock.acquires, 1)
+        self.assertEqual(binding.verify_calls, [])
+
+    def test_invalid_topology_is_rejected_before_identity_search_or_usb_open(self) -> None:
+        lock = RecordingLock()
+        binding = RecordingBinding()
+        access = VerifiedDiagnosticAccess(
+            lock,  # type: ignore[arg-type]
+            binding,  # type: ignore[arg-type]
+            Path("unused"),
+            lambda _path: inventory(),
+        )
+        diagnostic = Ds2438BranchDiagnostic(access=access)
+
+        with self.assertRaisesRegex(ValueError, "complete persisted topology"):
+            diagnostic.read(REQUEST)
+
+        self.assertEqual(binding.verify_calls, [])
+        self.assertEqual(binding.closed, 1)
+        self.assertTrue(lock.released)
+
+    def test_inconsistent_adapter_assignment_is_rejected_before_identity_search(self) -> None:
+        lock = RecordingLock()
+        binding = RecordingBinding()
+        access = VerifiedDiagnosticAccess(
+            lock,  # type: ignore[arg-type]
+            binding,  # type: ignore[arg-type]
+            Path("unused"),
+            lambda _path: topology_inventory(sensor_adapter=OTHER_ADAPTER),
+        )
+        diagnostic = Ds2438BranchDiagnostic(access=access)
+
+        with self.assertRaisesRegex(ValueError, "topology path does not match"):
+            diagnostic.read(REQUEST)
+
+        self.assertEqual(binding.verify_calls, [])
+        self.assertEqual(binding.closed, 1)
+        self.assertTrue(lock.released)
+
+    def test_invalid_target_identifiers_are_rejected_before_access_construction(self) -> None:
+        with self.assertRaises(ValueError):
+            Ds2438RequestedTarget(
+                bytes.fromhex("2601020304050600"),
+                ADAPTER,
+                COUPLER,
+                Ds2409Branch.MAIN,
+            )
+        with self.assertRaises(ValueError):
+            Ds2438RequestedTarget(
+                SENSOR,
+                ADAPTER,
+                bytes.fromhex("1F01020304050600"),
+                Ds2409Branch.MAIN,
+            )
 
     def test_cli_reports_native_values_but_never_fabricates_humidity(self) -> None:
         result = Ds2438DiagnosticResult(

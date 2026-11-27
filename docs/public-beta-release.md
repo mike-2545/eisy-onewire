@@ -1,13 +1,9 @@
-# v0.3.17 public beta release kit
-
-This file prepares public-facing text. It does not authorize a GitHub Release,
-Plugin Store publication, or forum posting.
+# v0.3.19 public beta release kit
 
 ## GitHub repository description
 
-Native DS9490 1-Wire plugin for Universal Devices eisy with DS18B20, DS2409,
-and explicitly configured DS2438 temperature, humidity, voltage, and solar
-irradiance support.
+Native DS9490 1-Wire plugin for Universal Devices eisy with identity-bound
+adapter access and DS18B20, DS2409, and explicitly configured DS2438 support.
 
 ## Suggested GitHub topics
 
@@ -17,59 +13,65 @@ irradiance support.
 
 ## Release notes
 
-Proposed release title: **eisy-onewire v0.3.17 — DS2438 Analog Voltage & Solar Irradiance**
+Proposed release title: **eisy-onewire v0.3.19 — Unattended Adapter Identity Recovery**
 
-### eisy-onewire 0.3.17 public beta
+### eisy-onewire 0.3.19 public beta
 
-Version 0.3.17 adds two explicit DS2438 applications while preserving the
-existing DS18B20, DS2409, and Honeywell HIH-4000 behavior:
+Version 0.3.19 can restore an existing, accepted DS9490 binding after an
+ordinary plugin restart or eisy reboot without weakening the identity safety
+introduced in 0.3.18:
 
-- `analog_voltage` publishes CRC-validated VAD and VDD measurements.
-- `solar_irradiance` publishes raw VAD and a configured linear conversion in
-  W/m²: `VAD × multiplier + offset`.
-- Solar calibration is per device, must be supplied by the operator, and is
-  never inferred from ROM family or observed voltage.
-- Missing or invalid solar calibration is isolated to that device and cannot
-  disable unrelated scheduler targets.
-- Application changes and calibration edits perform no USB operation.
-- Stable ROM-derived addresses, operator-owned IoX names, cached/stale state,
-  serialized access, zero automatic retries, and zero EEPROM writes remain in
-  force.
+- Every ordinary transaction remains bound to the same retained native handle
+  whose CRC-valid family-`0x81` ROM exactly matches accepted inventory.
+- A different adapter is never accepted automatically, even if it is the only
+  matching USB device or appears at the previous USB address or port.
+- Multiple matching adapters remain ambiguous and block automatic and ordinary
+  access. Simultaneous multi-adapter sensor-network operation is not supported.
+- **Automatic Adapter Recovery** is persistent, operator controlled, and
+  disabled by default. Enabling it authorizes one bounded identity Search ROM
+  per supported recovery event, with zero automatic retries.
+- The user's persistent **Automatic Refresh** preference is independent of the
+  current adapter binding. Scheduling resumes only after identity verification
+  and only when that preference was already enabled.
+- The readiness window is eight seconds. If it expires, use manual **Verify
+  Adapter Identity**; the plugin does not maintain a permanent USB hotplug
+  monitor.
+- Automatic recovery never performs topology discovery, branch switching,
+  sensor acquisition, EEPROM writes, or identity replacement.
 
-Controlled live acceptance verified generic analog VAD/VDD acquisition and a
-solar sensor's dark/illuminated voltage response plus the configured linear
-math. It did not establish absolute irradiance accuracy or current instrument
-calibration.
+Controlled live acceptance demonstrated one automatic verification and normal
+staggered scheduler recovery after both a plugin restart and a full eisy
+reboot. The precise retained-handle invalidation followed by reconnection
+within the eight-second window is covered by automated regression tests, not
+by the final live acceptance sequence.
 
-Beta limitations:
+Accessibility and recovery Notices are historical records. An older probe,
+refusal, or recovery result can remain visible after current state changes;
+operators should use the current controller fields and newest Notice together.
 
-- One DS9490 adapter and one DS2409 level.
-- No parasite-powered DS18B20 support.
-- Unknown DS2438 applications remain inventory-only.
-- Solar multiplier and offset require application-specific calibration data.
-- Advanced DS2409 acknowledgment can irreversibly clear event latches.
-
-Read the installation guide and leave Automatic Refresh disabled until manual
-reads pass for the local topology.
+Beta limitations remain: one identity-verified DS9490, one DS2409 level, no
+parasite-powered DS18B20 conversion, no automatic discovery or measurement
+retry, and operator-supplied calibration for solar irradiance.
 
 ## UD Plugin Store listing
 
 **Short description**
 
-Native DS9490 1-Wire temperature, humidity, voltage, and calibrated solar
-integration for eisy.
+Identity-bound DS9490 1-Wire temperature, humidity, voltage, and calibrated
+solar integration for eisy.
 
 **Full description**
 
-eisy-onewire operates a Dallas/Maxim DS9490/DS9490R directly from Universal
-Devices eisy using native FreeBSD libusb. It discovers CRC-valid 1-Wire ROMs,
-creates stable IoX nodes for externally powered DS18B20 sensors, supports
-manual and scheduled refresh, and provides Fahrenheit/Celsius presentation.
-One-level DS2409 branches use conservative event-latch safeguards. Explicitly
-identified DS2438 applications support Honeywell HIH-4000 humidity, generic
-VAD/VDD monitoring, and operator-calibrated solar irradiance. Version 0.3.17
-remains a public beta: one adapter, no parasite power, no automatic discovery
-or retries, and advanced branch access requires careful local validation.
+eisy-onewire operates one Dallas/Maxim DS9490/DS9490R directly from Universal
+Devices eisy using native FreeBSD libusb. It creates stable IoX nodes for
+externally powered DS18B20 sensors, supports conservative one-level DS2409
+branches, and supports explicitly identified DS2438 humidity, generic voltage,
+and calibrated solar applications. Version 0.3.19 adds a default-disabled
+operator authorization for unattended verification of an already accepted
+adapter identity after startup. Unknown, substituted, or ambiguous adapters
+fail closed. Automatic Refresh intent persists independently and resumes only
+after a successful identity match. This beta does not manage multiple adapter
+networks simultaneously.
 
 ## Suggested URLs
 
@@ -80,40 +82,27 @@ or retries, and advanced branch access requires careful local validation.
 - Bugs and sensor requests: `https://github.com/mike-2545/eisy-onewire/issues`
 - Community support: `https://forum.universal-devices.com/`
 
-## Friendly UD forum announcement
+## Plugin Store metadata
 
-**Subject: eisy-onewire 0.3.17 beta: DS2438 analog voltage and solar support**
+- Version: `0.3.19`
+- Edition: `Beta`
+- Archive: `https://github.com/mike-2545/eisy-onewire/releases/download/v0.3.19/eisy-onewire-0.3.19.tar.gz`
+- SHA-256: `8DF6B15FB8AF024F5CBDCFEEFF8F741E3958EAB66D2B43DFF2602333F78FDF7B`
+- License: MIT; retain `THIRD_PARTY_NOTICES.md`
 
-eisy-onewire connects a DS9490/DS9490R directly to eisy through native
-FreeBSD libusb, without a Raspberry Pi or OWFS host. Version 0.3.17 adds
-explicit DS2438 generic-voltage and calibrated-solar applications alongside
-the existing DS18B20, DS2409, and HIH-4000 support.
-
-Solar support deliberately has no universal default calibration. Operators
-must identify their attached analog hardware and supply its multiplier and
-optional offset. The live acceptance test verified voltage response and the
-configured calculation, not absolute irradiance calibration.
-
-Please read the limitations before installing. DS2409 event-latch
-acknowledgment is advanced and can irreversibly clear latch evidence. Start
-with Automatic Refresh off and validate one manual read at a time.
-
-When reporting a bug, include plugin/eisy/IoX versions, adapter model, sensor
-family, redacted topology and Notices, the exact command and timestamp, and
-expected versus actual behavior. Do not post credentials or full automation
-exports. New-sensor requests should include an authoritative datasheet and
-power/topology details.
+No USB ownership rule, plugin slot, purchase option, or existing configuration
+metadata changes are required solely for this update.
 
 ## Artifact
 
-The live-accepted v0.3.17 archive contains 49 allowlisted files and has
-SHA-256 `6A162DC8ECCC3C3AADC8C0BC88F420D84E9C9FB89B47ECC766514152301A86FB`.
-The release kit and private acceptance record are not packaged, so the public
-archive must remain byte-identical to the accepted artifact.
+The live-accepted v0.3.19 archive contains 53 allowlisted files and has
+SHA-256 `8DF6B15FB8AF024F5CBDCFEEFF8F741E3958EAB66D2B43DFF2602333F78FDF7B`.
+Publish that exact archive; do not rebuild it from the public documentation
+commit.
 
 ## Repository model
 
-The private `mike-2545/eisy-onewire-dev` repository remains the authoritative
-development source. The public `mike-2545/eisy-onewire` repository receives
-reviewed, independently rooted sanitized snapshots. Private commits and
-acceptance-system identifiers are never pushed to the public repository.
+The public repository uses independent Git history and receives reviewed,
+sanitized source snapshots. Development commits, credentials, private
+infrastructure, adapter identities, and installation-specific acceptance
+evidence are not included.

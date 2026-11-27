@@ -15,6 +15,7 @@ from eisy_onewire.search_diagnostic import main as search_main  # noqa: E402
 from eisy_onewire.status_diagnostic import main as status_main  # noqa: E402
 from eisy_onewire.temperature_diagnostic import main as temperature_main  # noqa: E402
 from eisy_onewire.ds2438_diagnostic import main as ds2438_main  # noqa: E402
+from eisy_onewire.adapter_identity import main as adapter_identity_main  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -29,6 +30,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "temperature-power",
             "temperature-read",
             "ds2438-read",
+            "adapter-enumerate",
+            "adapter-identify",
         ),
     )
     parser.add_argument("--rom")
@@ -36,11 +39,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--coupler-rom")
     parser.add_argument("--branch", choices=("main", "aux"))
     parser.add_argument("--acknowledge-event-clear", action="store_true")
+    parser.add_argument("--bus-number", type=int)
+    parser.add_argument("--device-address", type=int)
+    parser.add_argument("--port-path")
     arguments = parser.parse_args(argv)
     if arguments.command == "adapter-status":
-        return status_main([arguments.command])
+        if arguments.adapter_rom is None:
+            parser.error("adapter-status requires --adapter-rom")
+        return status_main(
+            [arguments.command, "--adapter-rom", arguments.adapter_rom]
+        )
+    if arguments.command == "adapter-enumerate":
+        return adapter_identity_main([arguments.command])
+    if arguments.command == "adapter-identify":
+        if arguments.bus_number is None or arguments.device_address is None:
+            parser.error("adapter-identify requires --bus-number and --device-address")
+        forwarded = [
+            arguments.command,
+            "--bus-number", str(arguments.bus_number),
+            "--device-address", str(arguments.device_address),
+        ]
+        if arguments.port_path:
+            forwarded.extend(("--port-path", arguments.port_path))
+        return adapter_identity_main(forwarded)
     if arguments.command == "search-rom":
-        return search_main([arguments.command])
+        if arguments.adapter_rom is None:
+            parser.error("search-rom requires --adapter-rom")
+        return search_main(
+            [arguments.command, "--adapter-rom", arguments.adapter_rom]
+        )
     if arguments.command == "ds2438-read":
         required = (arguments.rom, arguments.adapter_rom, arguments.coupler_rom, arguments.branch)
         if any(value is None for value in required):
@@ -57,9 +84,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.acknowledge_event_clear:
             forwarded.append("--acknowledge-event-clear")
         return ds2438_main(forwarded)
-    if arguments.rom is None:
-        parser.error(f"{arguments.command} requires --rom")
-    return temperature_main([arguments.command, "--rom", arguments.rom])
+    if arguments.rom is None or arguments.adapter_rom is None:
+        parser.error(f"{arguments.command} requires --rom and --adapter-rom")
+    return temperature_main(
+        [
+            arguments.command,
+            "--rom",
+            arguments.rom,
+            "--adapter-rom",
+            arguments.adapter_rom,
+        ]
+    )
 
 
 if __name__ == "__main__":

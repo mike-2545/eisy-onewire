@@ -7,11 +7,18 @@ import json
 import sys
 from typing import Callable, Sequence, TextIO
 
+from .adapter_binding import AdapterBindingError
 from .ds18b20 import (
     Ds18b20Error,
     parse_ds18b20_rom,
 )
 from .ds2490_transport import Ds2490Error
+from .ds18b20_transport import Ds18b20Adapter
+from .diagnostic_access import (
+    DiagnosticAccessError,
+    VerifiedDiagnosticAccess,
+    parse_adapter_identity,
+)
 from .temperature_service import TemperatureAdapter, TemperatureService
 from .version import PLUGIN_VERSION
 
@@ -19,7 +26,10 @@ from .version import PLUGIN_VERSION
 def main(
     argv: Sequence[str] | None = None,
     *,
-    adapter_factory: Callable[[], TemperatureAdapter] | None = None,
+    adapter_factory: Callable[[object], TemperatureAdapter] | None = None,
+    access_factory: Callable[[], VerifiedDiagnosticAccess] = (
+        VerifiedDiagnosticAccess.native
+    ),
     output: TextIO = sys.stdout,
     error_output: TextIO = sys.stderr,
 ) -> int:
@@ -28,17 +38,27 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("temperature-power", "temperature-read"))
     parser.add_argument("--rom", required=True, help="16 hexadecimal wire-order ROM bytes")
+    parser.add_argument(
+        "--adapter-rom",
+        required=True,
+        help="accepted CRC-valid family-0x81 adapter ROM",
+    )
     arguments = parser.parse_args(argv)
 
     try:
         rom = parse_ds18b20_rom(arguments.rom)
-        service = (
-            TemperatureService(adapter_factory)
-            if adapter_factory
-            else TemperatureService()
-        )
+        expected = parse_adapter_identity(arguments.adapter_rom)
+
+        def run(binding, _inventory):
+            create_adapter = adapter_factory or (lambda factory: Ds18b20Adapter(factory))
+            service = TemperatureService(lambda: create_adapter(binding))
+            if arguments.command == "temperature-power":
+                return service.detect_power(rom)
+            return service.read(rom)
+
+        result = access_factory().run(expected, run)
         if arguments.command == "temperature-power":
-            power = service.detect_power(rom)
+            power = result
             rendered: dict[str, object] = {
                 "status": "ok",
                 "version": PLUGIN_VERSION,
@@ -49,9 +69,12 @@ def main(
                 "strong_pullup_enabled": False,
                 "automatic_retries": 0,
                 "iox_writes": 0,
+                "adapter_identity_rom": expected.hex().upper(),
+                "identity_verification_searches": 1,
+                "same_retained_handle": True,
             }
         else:
-            measurement = service.read(rom)
+            measurement = result
             rendered = {
                 "status": "ok",
                 "version": PLUGIN_VERSION,
@@ -69,8 +92,18 @@ def main(
                 "strong_pullup_enabled": False,
                 "automatic_retries": 0,
                 "iox_writes": 0,
+                "adapter_identity_rom": expected.hex().upper(),
+                "identity_verification_searches": 1,
+                "same_retained_handle": True,
             }
-    except (Ds18b20Error, Ds2490Error, OSError, ValueError) as exc:
+    except (
+        DiagnosticAccessError,
+        AdapterBindingError,
+        Ds18b20Error,
+        Ds2490Error,
+        OSError,
+        ValueError,
+    ) as exc:
         json.dump(
             {
                 "status": "error",

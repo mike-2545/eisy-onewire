@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from eisy_onewire.discovery_inventory import INVENTORY_KEY
+from eisy_onewire.discovery_inventory import INVENTORY_KEY, DiscoveryInventory, update_inventory
 from eisy_onewire.ds2409_transport import (
     BranchHop,
     Ds2409Branch,
@@ -26,9 +28,15 @@ from eisy_onewire.node_registry import (
     DS2409_STATUS_NOTICE_KEY,
     DS2438_APPLICATION_NOTICE_KEY,
     DS2438_TRANSITION_NOTICE_KEY,
+    ADAPTER_BINDING_NOTICE_KEY,
     FRIENDLY_NAME_NOTICE_KEY,
     OneWireNodeRegistry,
     TEMPERATURE_PRESENTATION_NOTICE_KEY,
+)
+from eisy_onewire.adapter_recovery import (
+    ADAPTER_RECOVERY_CONFIGURATION_KEY,
+    ADAPTER_RECOVERY_NOTICE_KEY,
+    AdapterRecoveryWorker,
 )
 from eisy_onewire.sensor_config import Ds2438Application
 from eisy_onewire.onewire_discovery import (
@@ -37,7 +45,10 @@ from eisy_onewire.onewire_discovery import (
     OneWireDevice,
     dallas_crc8,
 )
-from eisy_onewire.refresh_configuration import REFRESH_CONFIGURATION_KEY
+from eisy_onewire.refresh_configuration import (
+    REFRESH_CONFIGURATION_KEY,
+    RefreshConfiguration,
+)
 from eisy_onewire.temperature_presentation import (
     TEMPERATURE_PRESENTATION_KEY,
     TemperaturePresentation,
@@ -129,8 +140,11 @@ class Controller:
         adapter_accessible,
         discover,
         read_ds2409_status,
+        verify_adapter_identity=lambda: False,
         automatic_refresh_enabled=False,
         set_automatic_refresh=lambda enabled: False,
+        adapter_recovery_enabled=False,
+        set_adapter_recovery=lambda enabled: False,
         temperature_presentation=None,
         set_temperature_unit=lambda unit: False,
         set_temperature_precision=lambda places: False,
@@ -142,8 +156,11 @@ class Controller:
         self.adapter_accessible = adapter_accessible
         self.discover = discover
         self.read_ds2409_status = read_ds2409_status
+        self.verify_adapter_identity = verify_adapter_identity
         self.automatic_refresh_enabled = automatic_refresh_enabled
         self.set_automatic_refresh = set_automatic_refresh
+        self.adapter_recovery_enabled = adapter_recovery_enabled
+        self.set_adapter_recovery = set_adapter_recovery
         self.temperature_presentation = temperature_presentation
         self.set_temperature_unit = set_temperature_unit
         self.set_temperature_precision = set_temperature_precision
@@ -153,6 +170,12 @@ class Controller:
 
     def set_temperature_presentation(self, presentation) -> None:
         self.temperature_presentation = presentation
+
+    def set_adapter_recovery_enabled(self, enabled) -> None:
+        self.adapter_recovery_enabled = enabled
+
+    def set_adapter_accessible(self, accessible) -> None:
+        self.adapter_accessible = accessible
 
 
 class Sensor:
@@ -258,6 +281,32 @@ class ImmediatePresentationWorker:
         return True
 
 
+class ImmediateRecoveryWorker:
+    """No-thread recovery double; dedicated worker tests cover concurrency."""
+
+    def __init__(self, logger, **kwargs) -> None:
+        del logger
+        self.kwargs = kwargs
+        self.started = False
+        self.triggers = []
+
+    def start(self) -> None:
+        self.started = True
+
+    def trigger(self, reason) -> bool:
+        if not self.started:
+            return False
+        self.triggers.append(reason)
+        return True
+
+    def stop(self) -> None:
+        self.started = False
+
+    def wait_idle(self, timeout_seconds) -> bool:
+        del timeout_seconds
+        return True
+
+
 class DiscoveryFactory:
     def __init__(
         self, result: DiscoveryReport | TopologyDiscoveryReport | Exception
@@ -327,6 +376,9 @@ class NodeRegistryTests(unittest.TestCase):
         presentation_worker_factory=ImmediatePresentationWorker,
         ds2438_sensor_class=None,
         ds2438_sensor_classes=None,
+        adapter_binding=None,
+        adapter_recovery_worker_factory=ImmediateRecoveryWorker,
+        adapter_enumerator=lambda: (),
     ):
         interface = FakeInterface(database_names)
         params = FakeCustom()
@@ -352,6 +404,9 @@ class NodeRegistryTests(unittest.TestCase):
                 presentation_profile_updater or (lambda presentation: None)
             ),
             presentation_worker_factory=presentation_worker_factory,
+            adapter_binding=adapter_binding,
+            adapter_recovery_worker_factory=adapter_recovery_worker_factory,
+            adapter_enumerator=adapter_enumerator,
         )
         registry.test_scheduler_factory = scheduler
         return registry, interface, params, data, factory, logger
@@ -379,6 +434,307 @@ class NodeRegistryTests(unittest.TestCase):
         self.assertEqual((child.primary, child.name), ("onewire", "Test Sensor"))
         self.assertFalse(any(rename for _, rename in interface.added))
         self.assertEqual(factory.calls, 0, "startup must not perform Search ROM")
+
+    def test_production_binding_disarms_scheduler_until_explicit_identity_verification(self) -> None:
+        class Binding:
+            def __init__(self):
+                self.expected = []
+                self.closed = 0
+
+            def verify(self, expected):
+                self.expected.append(expected)
+                return SimpleNamespace(
+                    identity_rom=expected,
+                    root_device_count=2,
+                    descriptor=SimpleNamespace(
+                        bus_number=0, device_address=4, port_path=(2, 1)
+                    ),
+                )
+
+            def close(self):
+                self.closed += 1
+
+        inventory = update_inventory(
+            DiscoveryInventory(),
+            report(ADAPTER_ID),
+            timestamp="2026-11-27T12:00:00Z",
+        )
+        binding = Binding()
+        scheduler = SchedulerFactory()
+        registry, interface, _, _, _, _ = self.make_registry(
+            persisted={INVENTORY_KEY: inventory.to_data()},
+            scheduler_factory=scheduler,
+            adapter_binding=binding,
+        )
+        registry.handle_custom_parameters({})
+        registry.handle_custom_data({INVENTORY_KEY: inventory.to_data()})
+        registry.activate(adapter_accessible=True)
+
+        controller = interface.added[0][0]
+        self.assertFalse(controller.adapter_accessible)
+        self.assertFalse(scheduler.configurations[-1]["adapter_accessible"])
+        self.assertTrue(registry.verify_adapter_identity())
+        self.assertEqual(binding.expected, [ADAPTER_ID])
+        self.assertTrue(controller.adapter_accessible)
+        self.assertTrue(scheduler.configurations[-1]["adapter_accessible"])
+        notice = json.loads(interface.Notices[ADAPTER_BINDING_NOTICE_KEY])
+        self.assertEqual(notice["status"], "verified")
+        self.assertEqual(notice["adapter_identity_rom"], ADAPTER_ID.hex().upper())
+
+    def test_recovery_policy_defaults_disabled_and_is_persisted_without_usb(self) -> None:
+        registry, interface, _, data, factory, _ = self.make_registry()
+        self.ready(registry)
+
+        self.assertEqual(
+            data.values[ADAPTER_RECOVERY_CONFIGURATION_KEY],
+            {"schema_version": 1, "enabled": False},
+        )
+        controller = interface.added[0][0]
+        self.assertFalse(controller.adapter_recovery_enabled)
+        self.assertEqual(factory.calls, 0)
+        notice = json.loads(interface.Notices[ADAPTER_RECOVERY_NOTICE_KEY])
+        self.assertEqual(notice["status"], "disabled")
+
+    def test_authorized_startup_recovery_verifies_once_and_restores_scheduler_intent(self) -> None:
+        class Binding:
+            def __init__(self):
+                self.callback = None
+                self.verified = False
+                self.expected = []
+
+            def set_invalidation_callback(self, callback):
+                self.callback = callback
+
+            def verify(self, expected):
+                self.expected.append(expected)
+                self.verified = True
+                return SimpleNamespace(
+                    identity_rom=expected,
+                    root_device_count=2,
+                    descriptor=SimpleNamespace(
+                        bus_number=0, device_address=7, port_path=(4,)
+                    ),
+                )
+
+            def close(self):
+                self.verified = False
+
+        inventory = update_inventory(
+            DiscoveryInventory(),
+            report(ADAPTER_ID, SENSOR_A),
+            timestamp="2026-11-27T12:00:00Z",
+        )
+        refresh = RefreshConfiguration.from_data(None, inventory).with_master(True)
+        persisted = {
+            INVENTORY_KEY: inventory.to_data(),
+            REFRESH_CONFIGURATION_KEY: refresh.to_data(),
+            ADAPTER_RECOVERY_CONFIGURATION_KEY: {
+                "schema_version": 1,
+                "enabled": True,
+            },
+        }
+        binding = Binding()
+
+        def worker_factory(logger, **kwargs):
+            return AdapterRecoveryWorker(
+                logger,
+                **kwargs,
+                readiness_window_seconds=0.02,
+                readiness_poll_seconds=0.002,
+                settlement_seconds=0,
+                shutdown_timeout_seconds=1,
+            )
+
+        registry, interface, _, _, _, _ = self.make_registry(
+            persisted=persisted,
+            adapter_binding=binding,
+            adapter_recovery_worker_factory=worker_factory,
+            adapter_enumerator=lambda: (SimpleNamespace(),),
+        )
+        registry.handle_custom_parameters(DEFAULTS)
+        registry.handle_custom_data(persisted)
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(registry.wait_for_adapter_recovery())
+
+        self.assertEqual(binding.expected, [ADAPTER_ID])
+        controller = interface.added[0][0]
+        self.assertTrue(controller.adapter_accessible)
+        self.assertTrue(controller.adapter_recovery_enabled)
+        final = registry.test_scheduler_factory.configurations[-1]
+        self.assertTrue(final["master_enabled"])
+        self.assertTrue(final["armed"])
+        self.assertTrue(final["adapter_accessible"])
+        notice = json.loads(interface.Notices[ADAPTER_RECOVERY_NOTICE_KEY])
+        self.assertEqual(notice["status"], "verified")
+        self.assertEqual(notice["identity_transactions"], 1)
+        registry.shutdown()
+
+    def test_automatic_verification_does_not_enable_disabled_refresh(self) -> None:
+        class Binding:
+            verified = False
+
+            def set_invalidation_callback(self, callback):
+                self.callback = callback
+
+            def verify(self, expected):
+                self.verified = True
+                return SimpleNamespace(
+                    identity_rom=expected,
+                    root_device_count=1,
+                    descriptor=SimpleNamespace(
+                        bus_number=0, device_address=3, port_path=(4,)
+                    ),
+                )
+
+            def close(self):
+                self.verified = False
+
+        inventory = update_inventory(
+            DiscoveryInventory(), report(ADAPTER_ID), timestamp="2026-11-27T12:00:00Z"
+        )
+        persisted = {
+            INVENTORY_KEY: inventory.to_data(),
+            ADAPTER_RECOVERY_CONFIGURATION_KEY: {
+                "schema_version": 1,
+                "enabled": True,
+            },
+        }
+        registry, _, _, _, _, _ = self.make_registry(
+            persisted=persisted,
+            adapter_binding=Binding(),
+            adapter_recovery_worker_factory=lambda logger, **kwargs: AdapterRecoveryWorker(
+                logger,
+                **kwargs,
+                readiness_window_seconds=0.02,
+                readiness_poll_seconds=0.002,
+                settlement_seconds=0,
+                shutdown_timeout_seconds=1,
+            ),
+            adapter_enumerator=lambda: (SimpleNamespace(),),
+        )
+        registry.handle_custom_parameters(DEFAULTS)
+        registry.handle_custom_data(persisted)
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(registry.wait_for_adapter_recovery())
+        final = registry.test_scheduler_factory.configurations[-1]
+        self.assertFalse(final["master_enabled"])
+        self.assertFalse(final["armed"])
+        self.assertTrue(final["adapter_accessible"])
+        registry.shutdown()
+
+    def test_operator_disabling_refresh_during_recovery_wins_before_scheduler_arm(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class Binding:
+            verified = False
+
+            def set_invalidation_callback(self, callback):
+                self.callback = callback
+
+            def verify(self, expected):
+                entered.set()
+                release.wait(0.5)
+                self.verified = True
+                return SimpleNamespace(
+                    identity_rom=expected,
+                    root_device_count=2,
+                    descriptor=SimpleNamespace(
+                        bus_number=0, device_address=3, port_path=(4,)
+                    ),
+                )
+
+            def close(self):
+                self.verified = False
+
+        inventory = update_inventory(
+            DiscoveryInventory(),
+            report(ADAPTER_ID, SENSOR_A),
+            timestamp="2026-11-27T12:00:00Z",
+        )
+        refresh = RefreshConfiguration.from_data(None, inventory).with_master(True)
+        persisted = {
+            INVENTORY_KEY: inventory.to_data(),
+            REFRESH_CONFIGURATION_KEY: refresh.to_data(),
+            ADAPTER_RECOVERY_CONFIGURATION_KEY: {
+                "schema_version": 1,
+                "enabled": True,
+            },
+        }
+        registry, _, _, _, _, _ = self.make_registry(
+            persisted=persisted,
+            adapter_binding=Binding(),
+            adapter_recovery_worker_factory=lambda logger, **kwargs: AdapterRecoveryWorker(
+                logger,
+                **kwargs,
+                readiness_window_seconds=0.02,
+                readiness_poll_seconds=0.002,
+                settlement_seconds=0,
+                shutdown_timeout_seconds=1,
+            ),
+            adapter_enumerator=lambda: (SimpleNamespace(),),
+        )
+        registry.handle_custom_parameters(DEFAULTS)
+        registry.handle_custom_data(persisted)
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(entered.wait(0.5))
+
+        self.assertTrue(registry.set_automatic_refresh(False))
+        release.set()
+        self.assertTrue(registry.wait_for_adapter_recovery())
+
+        final = registry.test_scheduler_factory.configurations[-1]
+        self.assertFalse(final["master_enabled"])
+        self.assertFalse(final["armed"])
+        self.assertTrue(final["adapter_accessible"])
+        registry.shutdown()
+
+    def test_retained_handle_invalidation_disarms_runtime_and_clears_verified_notice(self) -> None:
+        class Binding:
+            def __init__(self):
+                self.callback = None
+
+            def set_invalidation_callback(self, callback):
+                self.callback = callback
+
+            def verify(self, expected):
+                return SimpleNamespace(
+                    identity_rom=expected,
+                    root_device_count=2,
+                    descriptor=SimpleNamespace(
+                        bus_number=0, device_address=3, port_path=(4,)
+                    ),
+                )
+
+            def close(self):
+                pass
+
+        inventory = update_inventory(
+            DiscoveryInventory(),
+            report(ADAPTER_ID),
+            timestamp="2026-11-27T12:00:00Z",
+        )
+        binding = Binding()
+        scheduler = SchedulerFactory()
+        registry, interface, _, _, _, _ = self.make_registry(
+            persisted={INVENTORY_KEY: inventory.to_data()},
+            scheduler_factory=scheduler,
+            adapter_binding=binding,
+        )
+        registry.handle_custom_parameters({})
+        registry.handle_custom_data({INVENTORY_KEY: inventory.to_data()})
+        registry.activate(adapter_accessible=True)
+        controller = interface.added[0][0]
+        self.assertTrue(registry.verify_adapter_identity())
+        self.assertTrue(controller.adapter_accessible)
+
+        binding.callback("retained DS9490 handle failed native health check")
+
+        self.assertFalse(controller.adapter_accessible)
+        self.assertFalse(scheduler.configurations[-1]["adapter_accessible"])
+        notice = json.loads(interface.Notices[ADAPTER_BINDING_NOTICE_KEY])
+        self.assertEqual(notice["status"], "unverified")
+        self.assertIn("Verify Adapter Identity", notice["operator_action"])
 
     def test_temperature_preferences_persist_restart_and_never_scan(self) -> None:
         profile_updates = []
@@ -743,7 +1099,7 @@ class NodeRegistryTests(unittest.TestCase):
         )
         self.assertNotIn("1f5566778899aa", {node.address for node in children})
         self.assertNotIn("81445566778899", {node.address for node in children})
-        self.assertEqual(data.saved, 3)
+        self.assertEqual(data.saved, 4)
         self.assertEqual(len(data.values[INVENTORY_KEY]["devices"]), 5)
 
         notice = json.loads(interface.Notices[DISCOVERY_NOTICE_KEY])
@@ -772,7 +1128,7 @@ class NodeRegistryTests(unittest.TestCase):
         self.assertEqual(addresses.count("28112233445566"), 1)
         self.assertEqual(addresses.count("28223344556677"), 1)
         self.assertEqual(factory.calls, 2)
-        self.assertEqual(data.saved, 4)
+        self.assertEqual(data.saved, 5)
 
     def test_restart_restores_last_known_nodes_stale_without_search(self) -> None:
         first, _, _, data, _, _ = self.make_registry(report(SENSOR_A, SENSOR_TWO))
@@ -912,7 +1268,7 @@ class NodeRegistryTests(unittest.TestCase):
         self.assertFalse(registry.discover_devices())
 
         self.assertEqual(factory.calls, 1)
-        self.assertEqual(data.saved, 1)
+        self.assertEqual(data.saved, 2)
         self.assertEqual(
             [node.address for node, _ in interface.added],
             ["onewire", "28112233445566"],
@@ -927,7 +1283,7 @@ class NodeRegistryTests(unittest.TestCase):
         self.ready(failed)
         self.assertFalse(failed.discover_devices())
         self.assertEqual(failed_factory.calls, 1)
-        self.assertEqual(failed_data.saved, 1)
+        self.assertEqual(failed_data.saved, 2)
         self.assertEqual(
             json.loads(failed_interface.Notices[DISCOVERY_NOTICE_KEY])["status"],
             "error",
@@ -939,7 +1295,7 @@ class NodeRegistryTests(unittest.TestCase):
         self.ready(empty)
         self.assertTrue(empty.discover_devices())
         self.assertEqual(empty_factory.calls, 1)
-        self.assertEqual(empty_data.saved, 2)
+        self.assertEqual(empty_data.saved, 3)
         notice = json.loads(empty_interface.Notices[DISCOVERY_NOTICE_KEY])
         self.assertEqual(notice["status"], "empty_bus")
         self.assertEqual(notice["reachable_roms_at_last_scan"], [])
@@ -1456,7 +1812,7 @@ class NodeRegistryTests(unittest.TestCase):
 
         self.assertFalse(registry.discover_devices())
 
-        self.assertEqual(data.saved, 1)
+        self.assertEqual(data.saved, 2)
         notice = json.loads(interface.Notices[DISCOVERY_NOTICE_KEY])
         self.assertEqual(notice["status"], "error")
         self.assertTrue(notice["irreversible_event_loss"])

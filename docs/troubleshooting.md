@@ -10,12 +10,30 @@
 
 ## Adapter Accessible is false
 
+Inspect the `ds9490_adapter_identity` and `adapter_identity_recovery` Notices
+first. If Automatic Adapter Recovery is disabled, or a reconnect occurred
+outside its bounded readiness event, use **Verify Adapter Identity**. Zero or
+multiple adapters, a different family-`0x81` ROM, missing accepted evidence,
+or a disconnected retained handle all fail closed; the plugin never falls back
+to the sole remaining adapter.
+
+These Notices form a history and an older accessibility probe, refusal, or
+recovery result can remain visible after state changes. Treat the controller's
+current **Adapter Accessible**, **Automatic Adapter Recovery**, and
+**Automatic Refresh** values plus the newest Notice as authoritative. The
+automatic reconnect readiness window is eight seconds; once it expires,
+verification is manual.
+
 - Confirm the USB device identifies as VID `04fa`, PID `2490`.
 - Confirm the rendered platform rule targets `/dev/$cdev`, the dedicated plugin
   account, and mode `0600`.
 - On first install, reconnect the adapter once after the rule is installed.
 - Do not use manual `chmod`, `chown`, or a global devd rule.
 - A busy adapter can indicate another process or standalone diagnostic holds it.
+  Packaged hardware diagnostics require the accepted CRC-valid family-`0x81`
+  ROM with `--adapter-rom`, validate installed inventory evidence, and use the
+  same cross-process lock as the plugin. Stop scheduled activity before an
+  operator-approved diagnostic; never bypass the lock or select by USB address.
 
 ## Profile commands or nodes are missing
 
@@ -55,6 +73,11 @@ Check all of the following:
 - the sensor has validated persisted topology;
 - branch access is allowed by the independent unattended policy; and
 - no other operation holds the shared adapter lock.
+
+The persisted master may be enabled while the scheduler is disarmed because
+adapter identity is unverified. This is intentional. Verify the adapter or
+review the recovery Notice; do not toggle intervals to work around identity
+failure. Automatic recovery never changes the saved master preference.
 
 The scheduler performs no immediate retries and never performs discovery.
 

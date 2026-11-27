@@ -35,7 +35,7 @@ class PluginPackageTests(unittest.TestCase):
                 manifest = json.load(package.extractfile("eisy-onewire.iox_plugin.json"))
 
         self.assertEqual(names, list(builder.PACKAGE_FILES))
-        self.assertEqual(len(names), 49)
+        self.assertEqual(len(names), 53)
         self.assertIn("LICENSE", names)
         self.assertIn("src/eisy_onewire/onewire_discovery.py", names)
         self.assertIn("src/eisy_onewire/search_diagnostic.py", names)
@@ -44,6 +44,7 @@ class PluginPackageTests(unittest.TestCase):
         self.assertIn("src/eisy_onewire/temperature_diagnostic.py", names)
         self.assertIn("src/eisy_onewire/temperature_service.py", names)
         self.assertIn("src/eisy_onewire/temperature_presentation.py", names)
+        self.assertIn("src/eisy_onewire/adapter_recovery.py", names)
         self.assertIn("src/eisy_onewire/presentation_worker.py", names)
         self.assertIn("src/eisy_onewire/controller_node.py", names)
         self.assertIn("src/eisy_onewire/ds18b20_node.py", names)
@@ -100,7 +101,7 @@ class PluginPackageTests(unittest.TestCase):
         )
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-        self.assertEqual(PLUGIN_VERSION, "0.3.17")
+        self.assertEqual(PLUGIN_VERSION, "0.3.19")
         self.assertEqual(metadata["plugin"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["dependencies"], ["udi_interface==3.4.9"])

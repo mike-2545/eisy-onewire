@@ -6,7 +6,9 @@ from .usb_detector import (
     DetectionResult,
     DetectionStatus,
     UsbDeviceDescriptor,
+    UsbDeviceSelector,
     detect_ds9490,
+    enumerate_ds9490,
 )
 
 __all__ = [
@@ -15,6 +17,8 @@ __all__ = [
     "DetectionResult",
     "DetectionStatus",
     "UsbDeviceDescriptor",
+    "UsbDeviceSelector",
     "detect_ds9490",
+    "enumerate_ds9490",
 ]
 

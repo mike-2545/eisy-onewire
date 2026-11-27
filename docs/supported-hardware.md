@@ -14,6 +14,11 @@ and unsupported/untested categories.
 | DS2438 generic analog-voltage application | Manual and scheduled root-bus VAD/VDD acquisition, CRC validation, persistence, and stale-state behavior tested. |
 | DS2438 linear solar-irradiance application | Manual dark/illuminated voltage response, configured linear calculation, restart persistence, and scheduled acquisition tested. Absolute irradiance calibration was not verified. |
 
+Version 0.3.19 live acceptance also demonstrated exact-match automatic adapter
+verification after plugin restart and a full eisy reboot, followed by resumed
+staggered scheduling. The precise retained-handle invalidation and reconnect
+within the eight-second readiness window remains automated-test-only.
+
 The accepted network included five CRC-valid ROMs and both root/branch devices,
 but those personal ROM values are not defaults and users need not reproduce the
 same topology.
@@ -29,6 +34,8 @@ same topology.
   volt (UOM 72) and watts/m² (UOM 74) units.
 - Failure paths for timeouts, malformed responses, CRC errors, disconnects,
   lock contention, unsafe event-latch states, and restoration failure.
+- Exact-match, default-off unattended recovery of an already accepted DS9490
+  identity on startup and bounded retained-handle invalidation events.
 
 Automated-test support does not mean every physical combination has been tested.
 Unattended DS2438 humidity and DS2409 branch measurements passed controlled
@@ -47,8 +54,9 @@ does not establish absolute irradiance accuracy.
 - DS2438 conversion codes span 0--10.23 V at 10 mV resolution; the data-sheet
   VAD accuracy specification is guaranteed only from 1.5 V. Low-output solar
   readings remain useful raw evidence but may have lower accuracy.
-- One DS9490 is selected by the plugin. Multiple-adapter selection is not yet
-  implemented.
+- One identity-verified DS9490 is selected by the plugin. Multiple-adapter
+  selection is not implemented; multiple matching descriptors block automatic
+  and ordinary access.
 
 For the manufacturer pinout, voltage limits, accuracy qualifications, signal
 conditioning, and worked application patterns, see
@@ -68,5 +76,7 @@ conditioning, and worked application patterns, see
 - Parasite-powered DS18B20 conversion/strong pull-up.
 - DS2438 EEPROM calibration writes.
 - Automatic discovery, automatic retry, or timing sweeps.
+- General persistent USB hotplug monitoring; reconnects outside a bounded
+  recovery event require manual identity verification.
 - HIH3600, HIH5030, HTM1735, or unidentified analog humidity circuits.
 - Arbitrary humidity models or automatic solar calibration.

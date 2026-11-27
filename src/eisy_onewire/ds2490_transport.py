@@ -12,13 +12,16 @@ import ctypes.util
 import sys
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .usb_detector import (
+    CtypesLibUsbBackend,
     DS9490_PRODUCT_ID,
     DS9490_VENDOR_ID,
     LIBUSB_ERROR_ACCESS,
     LIBUSB_SUCCESS,
+    UsbDeviceDescriptor,
+    UsbDeviceSelector,
     _LibUsbDeviceDescriptor,
 )
 
@@ -88,6 +91,10 @@ class Ds2490Error(RuntimeError):
 
 class AdapterNotFoundError(Ds2490Error):
     """No 04fa:2490 adapter was enumerated."""
+
+
+class AdapterSelectionAmbiguousError(Ds2490Error):
+    """More than one DS9490 matched an operation without an explicit selector."""
 
 
 class UsbPermissionError(Ds2490Error):
@@ -395,12 +402,22 @@ class Ds2490Adapter:
 
 
 class _NativeUsbSession(AbstractContextManager["_NativeUsbSession"]):
-    def __init__(self, library: object, context: ctypes.c_void_p, handle: ctypes.c_void_p) -> None:
+    def __init__(
+        self,
+        library: object,
+        context: ctypes.c_void_p,
+        handle: ctypes.c_void_p,
+        *,
+        owns_handle: bool = True,
+        handle_failed: Callable[[], None] | None = None,
+    ) -> None:
         self._library = library
         self._context = context
         self._handle = handle
         self._claimed = True
         self._closed = False
+        self._owns_handle = owns_handle
+        self._handle_failed = handle_failed
 
     def __enter__(self) -> "_NativeUsbSession":
         return self
@@ -418,11 +435,14 @@ class _NativeUsbSession(AbstractContextManager["_NativeUsbSession"]):
                     self._handle, INTERFACE
                 )
         finally:
-            try:
-                self._library.libusb_close(self._handle)
-            finally:
-                self._library.libusb_exit(self._context)
-                self._closed = True
+            if self._owns_handle:
+                try:
+                    self._library.libusb_close(self._handle)
+                finally:
+                    self._library.libusb_exit(self._context)
+            self._closed = True
+        if release_code < LIBUSB_SUCCESS and self._handle_failed is not None:
+            self._handle_failed()
         if release_code != LIBUSB_SUCCESS and not suppress_release_error:
             _check_operation("release DS2490 interface", release_code)
 
@@ -437,7 +457,7 @@ class _NativeUsbSession(AbstractContextManager["_NativeUsbSession"]):
             0,
             DEFAULT_TIMEOUT_MS,
         )
-        _check_transfer("control transfer", code)
+        self._check_transfer("control transfer", code)
 
     def bulk_out(self, payload: bytes) -> None:
         buffer = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
@@ -450,7 +470,7 @@ class _NativeUsbSession(AbstractContextManager["_NativeUsbSession"]):
             ctypes.byref(transferred),
             DEFAULT_TIMEOUT_MS,
         )
-        _check_transfer("bulk OUT transfer", code)
+        self._check_transfer("bulk OUT transfer", code)
         if transferred.value != len(payload):
             raise Ds2490ProtocolError(
                 f"bulk OUT transferred {transferred.value} of {len(payload)} bytes"
@@ -485,18 +505,25 @@ class _NativeUsbSession(AbstractContextManager["_NativeUsbSession"]):
         )
         if code < LIBUSB_SUCCESS:
             if code == LIBUSB_ERROR_OTHER:
+                if self._handle_failed is not None:
+                    self._handle_failed()
                 raise UsbTransportError(
                     operation,
                     code,
                     requested_length=length,
                     transferred_length=transferred.value,
                 )
-            _check_transfer(operation, code)
+            self._check_transfer(operation, code)
         if not 0 <= transferred.value <= length:
             raise Ds2490ProtocolError(
                 f"{operation} reported invalid length {transferred.value}"
             )
         return bytes(buffer[: transferred.value])
+
+    def _check_transfer(self, operation: str, code: int) -> None:
+        if code < LIBUSB_SUCCESS and self._handle_failed is not None:
+            self._handle_failed()
+        _check_transfer(operation, code)
 
 
 class CtypesLibUsbSessionFactory:
@@ -507,6 +534,7 @@ class CtypesLibUsbSessionFactory:
         library: object | None = None,
         *,
         policy: UsbSessionPolicy = SEARCH_SESSION_POLICY,
+        selector: UsbDeviceSelector | None = None,
     ) -> None:
         if library is None:
             if not sys.platform.startswith("freebsd"):
@@ -518,22 +546,30 @@ class CtypesLibUsbSessionFactory:
             self._configure_signatures(library)
         self._library = library
         self._policy = policy
+        self._selector = selector
+        self.selected_descriptor: UsbDeviceDescriptor | None = None
 
     @classmethod
     def for_status_diagnostic(
-        cls, library: object | None = None
+        cls,
+        library: object | None = None,
+        *,
+        selector: UsbDeviceSelector | None = None,
     ) -> "CtypesLibUsbSessionFactory":
         """Open without changing configuration or alternate setting."""
 
-        return cls(library, policy=STATUS_DIAGNOSTIC_POLICY)
+        return cls(library, policy=STATUS_DIAGNOSTIC_POLICY, selector=selector)
 
     @classmethod
     def for_search_diagnostic(
-        cls, library: object | None = None
+        cls,
+        library: object | None = None,
+        *,
+        selector: UsbDeviceSelector | None = None,
     ) -> "CtypesLibUsbSessionFactory":
         """Claim interface 0 without changing configuration or alternate setting."""
 
-        return cls(library, policy=SEARCH_DIAGNOSTIC_POLICY)
+        return cls(library, policy=SEARCH_DIAGNOSTIC_POLICY, selector=selector)
 
     @staticmethod
     def _configure_signatures(library: object) -> None:
@@ -614,6 +650,8 @@ class CtypesLibUsbSessionFactory:
         count = self._library.libusb_get_device_list(context, ctypes.byref(devices))
         _check_operation("enumerate USB devices", count)
         descriptor_error: int | None = None
+        matches: list[tuple[ctypes.c_void_p, UsbDeviceDescriptor]] = []
+        descriptor_backend = CtypesLibUsbBackend(self._library)
         try:
             for offset in range(count):
                 descriptor = _LibUsbDeviceDescriptor()
@@ -628,15 +666,179 @@ class CtypesLibUsbSessionFactory:
                     or descriptor.idProduct != DS9490_PRODUCT_ID
                 ):
                     continue
-                handle = ctypes.c_void_p()
-                code = self._library.libusb_open(devices[offset], ctypes.byref(handle))
-                _check_operation("open DS9490", code)
-                return handle
+                matches.append(
+                    (
+                        devices[offset],
+                        descriptor_backend._copy_descriptor(
+                            devices[offset], descriptor
+                        ),
+                    )
+                )
+            if descriptor_error is not None:
+                raise UsbTransportError(
+                    "inspect USB device descriptors", descriptor_error
+                )
+            candidates = matches
+            if self._selector is not None:
+                candidates = [
+                    item for item in matches if self._selector.matches(item[1])
+                ]
+                if not candidates:
+                    raise AdapterNotFoundError(
+                        "the explicitly selected DS9490 is no longer present"
+                    )
+            elif not candidates:
+                raise AdapterNotFoundError("no USB device matched 04fa:2490")
+            if len(candidates) != 1:
+                raise AdapterSelectionAmbiguousError(
+                    f"{len(candidates)} DS9490 adapters matched; "
+                    "explicit selection is required"
+                )
+            device, selected_descriptor = candidates[0]
+            handle = ctypes.c_void_p()
+            code = self._library.libusb_open(device, ctypes.byref(handle))
+            _check_operation("open DS9490", code)
+            self.selected_descriptor = selected_descriptor
+            return handle
         finally:
             self._library.libusb_free_device_list(devices, 1)
-        if descriptor_error is not None:
-            raise UsbTransportError("inspect USB device descriptors", descriptor_error)
-        raise AdapterNotFoundError("no USB device matched 04fa:2490")
+
+
+class PersistentCtypesLibUsbSessionFactory:
+    """Claim repeated sessions on one explicitly verified, still-open handle.
+
+    The retained handle is the binding.  Enumeration location is deliberately
+    not used to reopen a replacement device: after disconnect, this object is
+    permanently invalid and a new explicit identity verification is required.
+    """
+
+    def __init__(
+        self,
+        library: object,
+        context: ctypes.c_void_p,
+        handle: ctypes.c_void_p,
+        descriptor: UsbDeviceDescriptor,
+        *,
+        policy: UsbSessionPolicy = SEARCH_DIAGNOSTIC_POLICY,
+    ) -> None:
+        self._library = library
+        self._context = context
+        self._handle = handle
+        self._descriptor = descriptor
+        self._policy = policy
+        self._invalid = False
+        self._closed = False
+        self._session_active = False
+
+    @property
+    def descriptor(self) -> UsbDeviceDescriptor:
+        return self._descriptor
+
+    @property
+    def valid(self) -> bool:
+        return not self._invalid and not self._closed
+
+    @classmethod
+    def establish(
+        cls,
+        library: object | None = None,
+        *,
+        policy: UsbSessionPolicy = SEARCH_DIAGNOSTIC_POLICY,
+    ) -> "PersistentCtypesLibUsbSessionFactory":
+        opener = CtypesLibUsbSessionFactory(library, policy=policy)
+        context = ctypes.c_void_p()
+        code = opener._library.libusb_init(ctypes.byref(context))
+        _check_operation("libusb initialization", code)
+        handle: ctypes.c_void_p | None = None
+        try:
+            handle = opener._open_matching(context)
+            assert opener.selected_descriptor is not None
+            return cls(
+                opener._library,
+                context,
+                handle,
+                opener.selected_descriptor,
+                policy=policy,
+            )
+        except BaseException:
+            if handle is not None:
+                opener._library.libusb_close(handle)
+            opener._library.libusb_exit(context)
+            raise
+
+    def open(self) -> _NativeUsbSession:
+        if not self.valid:
+            raise AdapterNotFoundError(
+                "verified DS9490 binding is stale; explicitly verify identity again"
+            )
+        if self._session_active:
+            raise UsbInterfaceBusyError("verified DS9490 already has an active session")
+        configuration = ctypes.c_int()
+        code = self._library.libusb_get_configuration(
+            self._handle, ctypes.byref(configuration)
+        )
+        self._check_bound_operation("read USB configuration", code)
+        if configuration.value != self._policy.required_configuration:
+            if not self._policy.set_configuration_if_needed:
+                raise UsbConfigurationError(
+                    "verified DS9490 requires active USB configuration 1; "
+                    f"found {configuration.value} and left it unchanged"
+                )
+            code = self._library.libusb_set_configuration(
+                self._handle, self._policy.required_configuration
+            )
+            self._check_bound_operation("set USB configuration", code)
+        code = self._library.libusb_claim_interface(self._handle, INTERFACE)
+        self._check_bound_operation("claim DS2490 interface", code)
+        try:
+            if self._policy.alternate_setting is not None:
+                code = self._library.libusb_set_interface_alt_setting(
+                    self._handle, INTERFACE, self._policy.alternate_setting
+                )
+                self._check_bound_operation("select DS2490 alternate setting", code)
+        except BaseException:
+            self._library.libusb_release_interface(self._handle, INTERFACE)
+            raise
+        self._session_active = True
+        session = _NativeUsbSession(
+            self._library,
+            self._context,
+            self._handle,
+            owns_handle=False,
+            handle_failed=self.invalidate,
+        )
+        original_close = session.close
+
+        def close(*, suppress_release_error: bool = False) -> None:
+            try:
+                original_close(suppress_release_error=suppress_release_error)
+            finally:
+                self._session_active = False
+
+        session.close = close  # type: ignore[method-assign]
+        return session
+
+    def invalidate(self) -> None:
+        self._invalid = True
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self._session_active:
+            raise UsbInterfaceBusyError(
+                "cannot close verified DS9490 while a session is active"
+            )
+        try:
+            self._library.libusb_close(self._handle)
+        finally:
+            self._library.libusb_exit(self._context)
+            self._closed = True
+            self._invalid = True
+
+    def _check_bound_operation(self, operation: str, code: int) -> None:
+        if code < LIBUSB_SUCCESS:
+            self.invalidate()
+        _check_operation(operation, code)
 
 
 def _check_transfer(operation: str, code: int) -> None:
