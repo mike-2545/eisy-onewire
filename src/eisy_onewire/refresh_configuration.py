@@ -169,29 +169,34 @@ def resolved_sensor_configuration(
     rom: bytes,
     *,
     legacy_name_override: str | None,
-    database_name: str | None,
     default_name: str,
     previous: SensorRefreshConfiguration | None,
 ) -> SensorRefreshConfiguration:
-    """Resolve legacy override changes and persisted IoX renames deterministically."""
+    """Track plugin-owned creation names and deliberate legacy overrides.
+
+    Once a node has been registered, its displayed name belongs to the IoX
+    operator.  PG3's database name is not an authoritative current-name
+    source, so ordinary reconciliation never derives a rename from it.
+    ``legacy_name_override`` records only the last override observed by this
+    plugin; removing an override deliberately retains the last plugin-selected
+    name so that no compensating rename is attempted.
+    """
 
     parsed = _parse_supported_rom(rom.hex())
     address = sensor_address(parsed)
     legacy = _optional_name(legacy_name_override)
-    db_name = _optional_name(database_name)
     fallback = _name(default_name, "default_name")
     if previous is None:
-        effective = db_name or legacy or fallback
+        effective = legacy or fallback
         interval = 0
-    elif legacy != previous.legacy_name_override:
-        # A changed legacy parameter remains supported and wins once. Future
-        # IoX renames are then detected relative to this new snapshot.
-        effective = legacy or db_name or fallback
-        interval = previous.interval_seconds
-    elif db_name is not None and db_name != previous.effective_name:
-        effective = db_name
+    elif legacy is not None and legacy != previous.legacy_name_override:
+        # A newly added or deliberately changed legacy override is the only
+        # configuration action that authorizes an explicit rename.
+        effective = legacy
         interval = previous.interval_seconds
     else:
+        # An unchanged override, its removal, stale PG3 names, restarts, and
+        # unrelated configuration saves must never rename an existing node.
         effective = previous.effective_name
         interval = previous.interval_seconds
     return SensorRefreshConfiguration(parsed, address, interval, legacy, effective)

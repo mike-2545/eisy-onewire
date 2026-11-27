@@ -358,11 +358,18 @@ def create_ds18b20_node_class(
         ) -> None:
             """Apply only a registry-validated persisted topology target."""
 
-            self._branch_path = _validated_branch_path(branch_path)
+            validated_path = _validated_branch_path(branch_path)
+            changed = (
+                validated_path != self._branch_path
+                or target != self._branch_target
+                or event_clear_allowed != self._branch_event_clear_allowed
+                or error != self._branch_refresh_error
+            )
+            self._branch_path = validated_path
             self._branch_target = target
             self._branch_event_clear_allowed = event_clear_allowed
             self._branch_refresh_error = error
-            if self._branch_path:
+            if changed and self._branch_path:
                 self.setDriver(
                     AVAILABILITY_DRIVER,
                     0,

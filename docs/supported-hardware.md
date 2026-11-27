@@ -9,8 +9,8 @@ and unsupported/untested categories.
 | --- | --- |
 | DS9490/DS9490R USB adapter (`04fa:2490`) | Native FreeBSD libusb open/close, status, Search ROM, and serialized transactions tested. |
 | Externally powered DS18B20-compatible sensors (family `0x28`) | Multiple-device discovery, manual temperature, root scheduling, CRC, cached/stale behavior, and presentation tested. |
-| DS2409 MicroLAN coupler (family `0x1F`) | One-level main-branch discovery, manual branch temperature, event evidence, restoration, and readback tested. |
-| DS2438 (family `0x26`) with physically identified Honeywell HIH-4000-series application | One manual branch temperature/humidity acquisition tested with state restoration and zero EEPROM writes. |
+| DS2409 MicroLAN coupler (family `0x1F`) | One-level main-branch discovery, manual and scheduled branch temperature, event evidence, restoration, and readback tested. |
+| DS2438 (family `0x26`) with physically identified Honeywell HIH-4000-series application | Manual and repeated scheduled branch temperature/humidity acquisition tested with state restoration, zero EEPROM writes, and zero automatic retries. |
 
 The accepted network included five CRC-valid ROMs and both root/branch devices,
 but those personal ROM values are not defaults and users need not reproduce the
@@ -27,8 +27,10 @@ same topology.
   lock contention, unsafe event-latch states, and restoration failure.
 
 Automated-test support does not mean every physical combination has been tested.
-In particular, unattended DS2438 humidity measurement was not live-verified for
-v0.3.15.
+The live scheduled test covered one adapter, one DS2409 level, and one
+physically identified HIH-4000 application. Aux paths, other analog circuits,
+and other physical networks retain automated-test-only status until separately
+validated.
 
 ## Requirements and electrical assumptions
 

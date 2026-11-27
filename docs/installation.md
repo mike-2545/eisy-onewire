@@ -2,7 +2,7 @@
 
 ## Before installing
 
-eisy-onewire 0.3.15 is a public beta for Universal Devices eisy. Confirm that:
+eisy-onewire 0.3.16 is a beta release candidate for Universal Devices eisy. Confirm that:
 
 - eisy-ui/PG3x and IoX are current;
 - a DS9490/DS9490R (USB VID `04fa`, PID `2490`) is attached;

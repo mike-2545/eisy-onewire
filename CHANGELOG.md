@@ -3,6 +3,26 @@
 All notable user-facing changes are summarized here. Detailed engineering
 records are indexed in [docs/development-history.md](docs/development-history.md).
 
+## 0.3.16 — Configuration usability and reliability
+
+- Isolated optional friendly-name errors so they cannot disable unrelated
+  sensors or automatic refresh targets.
+- Added backward-compatible family-`0x26` naming overrides while making
+  standard IoX node Rename the preferred mechanism.
+- Made registered node names operator-owned: stale PG3 database names and
+  unrelated configuration saves cannot reverse an external IoX rename; only a
+  newly added or changed legacy override issues an explicit rename.
+- Added idempotent, inventory-derived DS2438 application selectors whose safe
+  default is `unassigned`; application identification remains explicit.
+- Preserved DS2409 authorization defaults and all hardware transaction paths.
+- Completed controlled live acceptance of repeated serialized root DS18B20,
+  one-level DS2409 branch DS18B20, and DS2438/HIH-4000 scheduled measurements;
+  all sensors remained current with no retry or restoration failure in the
+  available PG3 evidence.
+- Confirmed the platform node-name cache can remain stale after an external IoX
+  rename; ordinary reconciliation now treats the IoX-visible name as
+  operator-owned and favors noninterference.
+
 ## 0.3.15 — Public beta candidate
 
 - Added an IoX temperature/humidity node for a discovered DS2438 whose attached

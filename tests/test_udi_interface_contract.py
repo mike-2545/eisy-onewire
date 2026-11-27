@@ -350,7 +350,7 @@ class UdiInterfaceContractTests(unittest.TestCase):
         self.assertNotIn(TEMPERATURE_DRIVER, [d["driver"] for d in payload["drivers"]])
         self.assertFalse(any(d["value"] is None for d in payload["drivers"]))
 
-    def test_actual_rename_and_database_name_survive_restart_contract(self) -> None:
+    def test_actual_explicit_rename_and_stale_database_contract(self) -> None:
         polyglot = RealNodePolyglotHarness()
         node = self.make_node(polyglot)
 
@@ -371,7 +371,7 @@ class UdiInterfaceContractTests(unittest.TestCase):
                 self._nodes = {
                     ADDRESS: {
                         "address": ADDRESS,
-                        "name": "Garden Bin",
+                        "name": "Stale Plugin Name",
                         "drivers": [],
                     }
                 }
@@ -379,8 +379,20 @@ class UdiInterfaceContractTests(unittest.TestCase):
         restarted = DatabaseHarness()
         self.assertEqual(
             udi_interface.Interface.getNodeNameFromDb(restarted, ADDRESS),
-            "Garden Bin",
+            "Stale Plugin Name",
         )
+
+        class InterfaceHarness:
+            def __init__(self) -> None:
+                self.nodes_internal = {}
+                self.sent = []
+
+            def send(self, message, channel) -> None:
+                self.sent.append((message, channel))
+
+        interface = InterfaceHarness()
+        udi_interface.Interface.addNode(interface, node, rename=False)
+        self.assertFalse(interface.sent[-1][0]["addnode"][0]["rename"])
 
     def test_actual_json_profile_api_correlates_successful_ack(self) -> None:
         interface = RealProfileHarness()
@@ -885,6 +897,34 @@ class UdiInterfaceContractTests(unittest.TestCase):
         restored = DiscoveryInventory.from_data(restarted[INVENTORY_KEY])
         self.assertEqual(restored, second)
         self.assertEqual(restored.devices[0].first_seen, "2026-11-22T12:00:00Z")
+
+    def test_actual_customparams_assignment_preserves_existing_configuration(self) -> None:
+        class CustomHarness:
+            def __init__(self) -> None:
+                self.sent = []
+
+            def send(self, message, channel) -> None:
+                self.sent.append((deepcopy(message), channel))
+
+        harness = CustomHarness()
+        custom = udi_interface.Custom(harness, "customparams")
+        custom.load(
+            {
+                "_config_version": "1",
+                "_ds2409_event_flag_policy": "preserve",
+                "unrelated": "kept",
+            }
+        )
+        key = "_ds2438_application_2666778899AABB54"
+        custom[key] = "unassigned"
+
+        message, channel = harness.sent[-1]
+        self.assertEqual(channel, "custom")
+        self.assertEqual(message["set"][0]["key"], "customparams")
+        saved = message["set"][0]["value"]
+        self.assertEqual(saved[key], "unassigned")
+        self.assertEqual(saved["_ds2409_event_flag_policy"], "preserve")
+        self.assertEqual(saved["unrelated"], "kept")
 
     def test_actual_customdata_presentation_assignment_preserves_other_state(self) -> None:
         class CustomHarness:

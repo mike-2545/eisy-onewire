@@ -1,4 +1,4 @@
-# v0.3.15 public beta release kit
+# v0.3.16 public beta release kit
 
 This file prepares public-facing text. It does not authorize publication,
 repository visibility changes, a GitHub Release, Plugin Store publication, or
@@ -17,7 +17,9 @@ DS2409, and explicitly identified DS2438/HIH-4000 support.
 
 ## Release notes
 
-### eisy-onewire 0.3.15 public beta
+Proposed release title: **eisy-onewire v0.3.16 — Public Beta**
+
+### eisy-onewire 0.3.16 public beta
 
 eisy-onewire connects a DS9490/DS9490R directly to Universal Devices eisy—no
 Raspberry Pi or OWFS server required.
@@ -31,6 +33,8 @@ Highlights:
 - One-level DS2409 branch discovery/read support with explicit safeguards for
   irreversible event-latch clearing.
 - Explicit DS2438/Honeywell HIH-4000 temperature and relative-humidity support.
+- Safer configuration reconciliation: invalid optional names no longer disable
+  valid scheduler targets, and standard IoX renames remain operator-owned.
 - Serialized USB operations, no automatic retries, cached/stale validity, and
   platform-managed restrictive USB permissions.
 
@@ -39,7 +43,8 @@ Beta limitations:
 - One DS9490 adapter and one DS2409 level.
 - No parasite-powered DS18B20 support.
 - Unknown DS2438 applications remain inventory-only.
-- Unattended DS2438/branch humidity polling is not yet live-verified.
+- Live scheduled acceptance covered one root/branch network and one physically
+  identified HIH-4000 application; other topologies require local validation.
 - Advanced DS2409 acknowledgment can irreversibly clear event latches.
 
 Read the installation guide and leave Automatic Refresh disabled until manual
@@ -60,9 +65,10 @@ manual and scheduled temperature refresh, and provides Fahrenheit/Celsius and
 precision controls. One-level DS2409 branches are supported with conservative
 event-latch safeguards. A discovered DS2438 can expose temperature and humidity
 only when its analog application is explicitly identified as Honeywell
-HIH-4000. Version 0.3.15 is a public beta: one adapter, no parasite power, no
-automatic discovery/retries, and unattended DS2438 branch polling is not yet
-live-verified.
+HIH-4000. Version 0.3.16 also isolates optional naming errors and preserves
+operator-owned IoX names. It remains a public beta: one adapter, no parasite
+power, no automatic discovery/retries, and advanced DS2409 branch access
+requires careful local validation.
 
 ## Suggested URLs
 
@@ -79,7 +85,7 @@ These links will work for general users only after the repository is public.
 
 **Subject: Public beta: native DS9490 1-Wire plugin for eisy**
 
-I’m inviting beta testers for eisy-onewire 0.3.15. The plugin connects a
+I’m inviting beta testers for eisy-onewire 0.3.16. The plugin connects a
 DS9490/DS9490R directly to eisy through native FreeBSD libusb, without a
 Raspberry Pi or OWFS host.
 
@@ -118,24 +124,16 @@ measurements, and whether a live unit is available for controlled testing.
 
 ## Artifact
 
-The previously live-accepted v0.3.15 archive contained 45 files and had SHA-256
-`C438C060A8CB5690837B5BFBD6B04EAC8D4BB253C7642C4DD8B0D293DF3EF603`.
-
-Public-documentation changes modify packaged `README.md`, `POLYGLOT_CONFIG.md`,
-and `default-sensors.json`, and add packaged `THIRD_PARTY_NOTICES.md`. The
-first public-documentation candidate therefore contained 46 allowlisted files.
-The final MIT-licensed candidate adds `LICENSE`, contains 47 allowlisted files,
-and has SHA-256
-`156656D3218ABE533FDAF6A37548AE414685FC9E3E1A04175CC90AAF4602D622`. It
-must not silently replace or be described as byte-equivalent to the
-live-accepted artifact. Runtime Python and USB transport files remain
-byte-identical to the accepted v0.3.15 commit.
+The live-accepted v0.3.16 archive contains 47 allowlisted files and has SHA-256
+`766E7FB4EC0ECD1289FE5F4CBE87ADAABECFE4519BBF231261AFC09230CA5F54`.
+Public acceptance notes are stored outside the plugin package, so the public
+archive remains byte-identical to the accepted artifact.
 
 ## Repository model
 
-The authoritative private development repository is proposed to become
+The authoritative private development repository is
 `mike-2545/eisy-onewire-dev`. Public source is exported with independent
 history to `mike-2545/eisy-onewire`. See the
 [distribution workflow](public-distribution-workflow.md) and
-[repository transition plan](repository-transition-plan.md). No rename,
-repository creation, visibility change, or publication is implied by this kit.
+[repository transition plan](repository-transition-plan.md). This kit does not
+publish a GitHub Release, Plugin Store entry, or forum post.

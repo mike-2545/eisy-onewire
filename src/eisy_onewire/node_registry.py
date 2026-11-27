@@ -47,17 +47,21 @@ from .refresh_configuration import (
     resolved_sensor_configuration,
 )
 from .sensor_config import (
+    CONFIG_VERSION,
     CONFIG_VERSION_KEY,
+    DS2438_APPLICATION_PREFIX,
     ConfiguredDs18b20,
     ConfiguredDs2438,
+    Ds2438Application,
     Ds2409EventFlagPolicy,
     Ds2409UnattendedBranchPolicy,
+    FriendlyNameOverride,
     SensorConfigurationError,
+    parse_friendly_name_overrides,
     parse_ds2409_branch_read_event_flag_policy,
     parse_ds2409_event_flag_policy,
     parse_ds2409_unattended_branch_policy,
     parse_ds2438_applications,
-    parse_sensor_parameters,
 )
 from .temperature_presentation import (
     TEMPERATURE_PRESENTATION_KEY,
@@ -73,11 +77,13 @@ from .presentation_worker import (
 
 
 CONFIG_NOTICE_KEY = "onewire_sensor_configuration"
+FRIENDLY_NAME_NOTICE_KEY = "optional_sensor_names"
 DISCOVERY_NOTICE_KEY = "onewire_discovery"
 DS2409_STATUS_NOTICE_KEY = "ds2409_status"
 REFRESH_CONFIGURATION_NOTICE_KEY = "automatic_refresh_configuration"
 TEMPERATURE_PRESENTATION_NOTICE_KEY = "temperature_presentation"
 DS2438_CACHE_NOTICE_KEY = "ds2438_measurement_cache"
+DS2438_APPLICATION_NOTICE_KEY = "ds2438_application_parameters"
 
 
 class Logger(Protocol):
@@ -158,6 +164,8 @@ class OneWireNodeRegistry:
         self._adapter_accessible = False
         self._configured: tuple[ConfiguredDs18b20, ...] | None = None
         self._configured_ds2438: tuple[ConfiguredDs2438, ...] | None = None
+        self._friendly_name_overrides: dict[bytes, FriendlyNameOverride] = {}
+        self._custom_parameters_loaded = False
         self._event_flag_policy = Ds2409EventFlagPolicy.PRESERVE
         self._branch_read_event_policy = Ds2409EventFlagPolicy.PRESERVE
         self._unattended_branch_policy = Ds2409UnattendedBranchPolicy.DISABLED
@@ -191,12 +199,16 @@ class OneWireNodeRegistry:
             with self._state_lock:
                 self._configured = None
                 self._configured_ds2438 = None
+                self._fail_closed_registered_hardware_locked(
+                    "custom parameters must be a dictionary"
+                )
                 self._configuration_failed("custom parameters must be a dictionary")
                 if self._profile_ready:
                     self._configure_scheduler_locked()
             return
         with self._state_lock:
             self._custom.load(raw)
+            self._custom_parameters_loaded = True
             values = dict(self._custom.items())
             if CONFIG_VERSION_KEY not in values:
                 # First generic-controller startup only. The marker prevents a later user
@@ -204,7 +216,10 @@ class OneWireNodeRegistry:
                 self._custom.update(self._defaults, save=True)
                 values = dict(self._custom.items())
             try:
-                self._configured = parse_sensor_parameters(values)
+                if values.get(CONFIG_VERSION_KEY) != CONFIG_VERSION:
+                    raise SensorConfigurationError(
+                        f"{CONFIG_VERSION_KEY} must be {CONFIG_VERSION!r}"
+                    )
                 self._configured_ds2438 = parse_ds2438_applications(values)
                 self._event_flag_policy = parse_ds2409_event_flag_policy(values)
                 self._branch_read_event_policy = (
@@ -216,11 +231,26 @@ class OneWireNodeRegistry:
             except SensorConfigurationError as exc:
                 self._configured = None
                 self._configured_ds2438 = None
+                self._fail_closed_registered_hardware_locked(str(exc))
                 self._configuration_failed(str(exc))
                 if self._profile_ready:
                     self._configure_scheduler_locked()
                 return
+            overrides, name_errors = parse_friendly_name_overrides(
+                values, previous=self._friendly_name_overrides
+            )
+            self._friendly_name_overrides = {item.rom: item for item in overrides}
+            self._configured = tuple(
+                ConfiguredDs18b20(item.rom, item.address, item.name)
+                for item in overrides
+                if item.rom[0] == DS18B20_FAMILY
+            )
+            if name_errors:
+                self._friendly_names_failed(name_errors)
+            else:
+                self._interface.Notices.delete(FRIENDLY_NAME_NOTICE_KEY)
             self._interface.Notices.delete(CONFIG_NOTICE_KEY)
+            self._ensure_ds2438_application_parameters_locked()
             self._reconcile_locked()
 
     def handle_custom_data(self, raw: object) -> None:
@@ -273,6 +303,7 @@ class OneWireNodeRegistry:
                     self._configure_scheduler_locked()
                 return
             self._inventory_loaded = True
+            self._ensure_ds2438_application_parameters_locked()
             raw_presentation = values.get(TEMPERATURE_PRESENTATION_KEY)
             try:
                 loaded_presentation = TemperaturePresentation.from_data(
@@ -375,7 +406,9 @@ class OneWireNodeRegistry:
             self._configure_scheduler_locked()
             return
         inventory_by_rom = {item.rom: item for item in self._inventory.devices}
-        legacy_names = {item.rom: item.name for item in self._configured}
+        legacy_names = {
+            rom: item.name for rom, item in self._friendly_name_overrides.items()
+        }
         updated_refresh = self._refresh_configuration
         refresh_changed = False
         controller = self._registered.get(DEFAULT_CONTROLLER_ADDRESS)
@@ -402,7 +435,7 @@ class OneWireNodeRegistry:
                 is Ds2409EventFlagPolicy.ACKNOWLEDGE
             )
             interval_seconds = 0
-            rename_existing = False
+            explicit_legacy_rename = False
             if (
                 known is not None
                 and known.family_code == DS18B20_FAMILY
@@ -410,29 +443,17 @@ class OneWireNodeRegistry:
             ):
                 previous = updated_refresh.sensor(configured.rom)
                 legacy_name = legacy_names.get(configured.rom)
-                database_name = self._database_node_name(configured.address)
-                if registered_current is not None:
-                    current_name = getattr(registered_current, "name", None)
-                    database_name = (
-                        current_name
-                        if previous is not None
-                        and isinstance(current_name, str)
-                        and current_name != previous.effective_name
-                        else None
-                    )
                 resolved = resolved_sensor_configuration(
                     configured.rom,
                     legacy_name_override=legacy_name,
-                    database_name=database_name,
-                    default_name=configured.name,
+                    default_name=default_sensor_name(configured.rom),
                     previous=previous,
                 )
-                rename_existing = (
+                explicit_legacy_rename = (
                     previous is not None
+                    and legacy_name is not None
                     and previous.legacy_name_override != legacy_name
                     and registered_current is not None
-                    and getattr(registered_current, "name", None)
-                    != resolved.effective_name
                 )
                 if resolved != previous:
                     updated_refresh = updated_refresh.with_sensor(resolved)
@@ -441,14 +462,12 @@ class OneWireNodeRegistry:
                 configured = ConfiguredDs18b20(
                     configured.rom, configured.address, resolved.effective_name
                 )
-            else:
-                database_name = self._database_node_name(configured.address)
-                if database_name is not None:
-                    configured = ConfiguredDs18b20(
-                        configured.rom, configured.address, database_name
-                    )
             current = registered_current
-            if current is not None and getattr(current, "name", None) == configured.name:
+            if current is not None:
+                if explicit_legacy_rename:
+                    rename = getattr(current, "rename", None)
+                    if callable(rename):
+                        rename(configured.name)
                 update_target = getattr(current, "set_branch_target", None)
                 if update_target is not None:
                     update_target(
@@ -494,9 +513,9 @@ class OneWireNodeRegistry:
                 temperature_presentation=self._temperature_presentation,
                 record_temperature=self.record_temperature,
             )
-            # Same address is deliberate: on upgrade it reparents and renames
-            # the existing node instead of creating a second sensor node.
-            self._interface.addNode(node, rename=rename_existing)
+            # The address is stable, while rename=False makes an existing IoX
+            # node's externally assigned name authoritative across restart.
+            self._interface.addNode(node, rename=False)
             self._registered[configured.address] = node
             self._logger.info(
                 "Configured DS18B20 %s as %s under %s",
@@ -527,19 +546,26 @@ class OneWireNodeRegistry:
             if known is None or known.family_code != DS2438_FAMILY:
                 continue
             current = self._registered.get(configured.address)
+            if configured.application is Ds2438Application.UNASSIGNED:
+                if current is not None:
+                    authorize = getattr(current, "set_application_authorized", None)
+                    if callable(authorize):
+                        authorize(False)
+                continue
             previous = refresh.sensor(configured.rom)
             default_name = f"HIH-4000 {configured.rom[1:7].hex().upper()}"
-            database_name = self._database_node_name(configured.address)
-            if current is not None and previous is not None:
-                current_name = getattr(current, "name", None)
-                if isinstance(current_name, str) and current_name != previous.effective_name:
-                    database_name = current_name
+            legacy = self._friendly_name_overrides.get(configured.rom)
+            legacy_name = legacy.name if legacy is not None else None
             resolved = resolved_sensor_configuration(
                 configured.rom,
-                legacy_name_override=None,
-                database_name=database_name,
+                legacy_name_override=legacy_name,
                 default_name=default_name,
                 previous=previous,
+            )
+            explicit_legacy_rename = (
+                previous is not None
+                and legacy_name is not None
+                and previous.legacy_name_override != legacy_name
             )
             if resolved != previous:
                 refresh = refresh.with_sensor(resolved)
@@ -549,6 +575,13 @@ class OneWireNodeRegistry:
                 self._branch_read_event_policy is Ds2409EventFlagPolicy.ACKNOWLEDGE
             )
             if current is not None:
+                authorize = getattr(current, "set_application_authorized", None)
+                if callable(authorize):
+                    authorize(True)
+                if explicit_legacy_rename:
+                    rename = getattr(current, "rename", None)
+                    if callable(rename):
+                        rename(resolved.effective_name)
                 set_target = getattr(current, "set_branch_target", None)
                 if callable(set_target):
                     set_target(
@@ -914,10 +947,19 @@ class OneWireNodeRegistry:
         )
         if configuration_valid:
             inventory_by_rom = {item.rom: item for item in self._inventory.devices}
+            ds2438_applications = {
+                item.rom: item.application for item in self._configured_ds2438 or ()
+            }
             for setting in self._refresh_configuration.sensors:
                 known = inventory_by_rom.get(setting.rom)
                 node = self._registered.get(setting.address)
                 if known is None or node is None:
+                    continue
+                if (
+                    known.family_code == DS2438_FAMILY
+                    and ds2438_applications.get(setting.rom)
+                    is not Ds2438Application.HIH4000
+                ):
                     continue
                 automatic_eligible = True
                 if known.path:
@@ -979,14 +1021,64 @@ class OneWireNodeRegistry:
             targets=tuple(targets),
         )
 
-    def _database_node_name(self, address: str) -> str | None:
-        getter = getattr(self._interface, "getNodeNameFromDb", None)
-        if getter is None:
-            return None
-        value = getter(address)
-        if not isinstance(value, str) or not value.strip():
-            return None
-        return value.strip()
+    def _ensure_ds2438_application_parameters_locked(self) -> None:
+        """Publish safe inventory-derived selectors without authorizing hardware."""
+
+        if not self._custom_parameters_loaded or not self._inventory_loaded:
+            return
+        values = dict(self._custom.items())
+        changed = False
+        errors: list[str] = []
+        for device in self._inventory.devices:
+            if device.family_code != DS2438_FAMILY:
+                continue
+            key = f"{DS2438_APPLICATION_PREFIX}{device.rom.hex().upper()}"
+            if key in values:
+                continue
+            try:
+                self._custom[key] = Ds2438Application.UNASSIGNED.value
+            except Exception as exc:
+                errors.append(f"{key}: {type(exc).__name__}: {exc}")
+                continue
+            values[key] = Ds2438Application.UNASSIGNED.value
+            changed = True
+        if errors:
+            self._interface.Notices[DS2438_APPLICATION_NOTICE_KEY] = json.dumps(
+                {
+                    "status": "application_parameter_population_failed",
+                    "details": errors,
+                    "hardware_authorized": False,
+                    "action": "Save plugin configuration again or restart the plugin.",
+                },
+                sort_keys=True,
+            )
+        else:
+            self._interface.Notices.delete(DS2438_APPLICATION_NOTICE_KEY)
+        if changed:
+            # Reflect the just-published safe declarations immediately; the
+            # later PG3 customparams callback is intentionally idempotent.
+            self._configured_ds2438 = parse_ds2438_applications(values)
+
+    def _fail_closed_registered_hardware_locked(self, detail: str) -> None:
+        """Revoke affected hardware paths after safety configuration fails."""
+
+        for node in self._registered.values():
+            rom = getattr(node, "rom", b"")
+            if isinstance(rom, bytes) and rom[:1] == bytes((DS2438_FAMILY,)):
+                authorize = getattr(node, "set_application_authorized", None)
+                if callable(authorize):
+                    authorize(False)
+            path = getattr(node, "_branch_path", getattr(node, "branch_path", ()))
+            if not path:
+                continue
+            set_target = getattr(node, "set_branch_target", None)
+            if callable(set_target):
+                set_target(
+                    path,
+                    None,
+                    event_clear_allowed=False,
+                    error=f"safety-critical configuration invalid: {detail}",
+                )
 
     def _branch_target_locked(
         self, known: KnownDevice | None
@@ -1106,6 +1198,7 @@ class OneWireNodeRegistry:
                         "evidence mirror failed and remains invalid"
                     ) from exc
                 self._inventory_loaded = True
+                self._ensure_ds2438_application_parameters_locked()
                 self._reconcile_locked()
                 self._report_scan_locked()
 
@@ -1209,16 +1302,22 @@ class OneWireNodeRegistry:
             )
 
         by_name: dict[str, ConfiguredDs18b20] = {}
-        for item in desired.values():
+        resolved: list[ConfiguredDs18b20] = []
+        for item in sorted(desired.values(), key=lambda value: value.address):
             folded = item.name.casefold()
             conflict = by_name.get(folded)
             if conflict is not None and conflict.address != item.address:
-                raise SensorConfigurationError(
+                fallback = default_sensor_name(item.rom)
+                self._friendly_names_failed((
                     f"friendly name {item.name!r} conflicts between ROMs "
-                    f"{conflict.rom.hex().upper()} and {item.rom.hex().upper()}"
-                )
+                    f"{conflict.rom.hex().upper()} and {item.rom.hex().upper()}; "
+                    f"using deterministic name {fallback!r} for the latter",
+                ))
+                item = ConfiguredDs18b20(item.rom, item.address, fallback)
+                folded = fallback.casefold()
             by_name[folded] = item
-        return tuple(sorted(desired.values(), key=lambda item: item.address))
+            resolved.append(item)
+        return tuple(resolved)
 
     def _report_restored_inventory_locked(self) -> None:
         if self._inventory.last_scan is None and not self._inventory.devices:
@@ -1388,6 +1487,26 @@ class OneWireNodeRegistry:
     def _configuration_failed(self, detail: str) -> None:
         self._interface.Notices[CONFIG_NOTICE_KEY] = detail
         self._logger.error("1-Wire sensor configuration rejected: %s", detail)
+
+    def _friendly_names_failed(self, details: tuple[str, ...]) -> None:
+        payload = {
+            "status": "invalid_optional_friendly_names",
+            "details": list(details),
+            "action": (
+                "Correct or remove the listed optional ROM-keyed name. "
+                "Use standard IoX node Rename for routine naming."
+            ),
+            "scheduler_affected": False,
+            "usb_activity": False,
+        }
+        self._interface.Notices[FRIENDLY_NAME_NOTICE_KEY] = json.dumps(
+            payload, sort_keys=True
+        )
+        self._logger.warning(
+            "Optional 1-Wire friendly-name entries rejected without disabling "
+            "valid sensors: %s",
+            "; ".join(details),
+        )
 
     def _inventory_failed(self, detail: str) -> None:
         self._interface.Notices[DISCOVERY_NOTICE_KEY] = json.dumps(

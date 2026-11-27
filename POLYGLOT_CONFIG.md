@@ -1,6 +1,6 @@
 # eisy-onewire configuration reference
 
-Version 0.3.15 uses the supported eisy-ui plugin configuration and IoX command
+Version 0.3.16 uses the supported eisy-ui plugin configuration and IoX command
 interfaces. Most users can discover sensors, rename nodes, select intervals,
 and change temperature presentation without typing a ROM.
 
@@ -23,7 +23,8 @@ sensor measurement is initiated by saving configuration.
 Prefer the standard IoX rename action after discovery. Stable node addresses
 remain derived from the full 64-bit ROM.
 
-An optional ROM-keyed override is supported for compatibility:
+An optional ROM-keyed override is supported for compatibility for DS18B20
+(`0x28`) and DS2438 (`0x26`) devices:
 
 ```text
 <complete-CRC-valid-16-character-ROM>=Friendly Name
@@ -31,20 +32,35 @@ An optional ROM-keyed override is supported for compatibility:
 
 The key must contain all eight ROM bytes as uppercase or lowercase hexadecimal,
 without OWFS punctuation. Sensors without an override receive deterministic
-ROM-based names.
+ROM-based names. A malformed optional name raises an actionable Notice but
+does not disable unrelated sensors or scheduler targets. Correct or remove the
+entry to clear the Notice. To migrate, rename through IoX, allow reconciliation
+to complete, then remove the legacy override. Removal never restores a default
+or previously cached name. A newly added or changed valid override deliberately
+renames the node once; an unchanged override and unrelated configuration saves
+do not rename it.
 
 ## DS2438/HIH-4000 application
 
-A discovered family-`0x26` device is inventory-only until its attached analog
-application is identified physically. For a Honeywell HIH-4000-series circuit:
+A discovered family-`0x26` device automatically receives a safe selector:
+
+```text
+_ds2438_application_<complete-CRC-valid-ROM>=unassigned
+```
+
+It remains inventory-only and cannot be measured. After identifying a
+Honeywell HIH-4000-series circuit, change the value to `hih4000`:
 
 ```text
 _ds2438_application_<complete-CRC-valid-ROM>=hih4000
 ```
 
-Do not add this declaration based only on the family code or voltage values.
+Do not select `hih4000` based only on the family code or voltage values.
 The plugin does not support arbitrary DS2438 analog circuits and never writes
 DS2438 EEPROM. A configured node starts stale with interval Off.
+Changing an existing selector back to `unassigned` immediately revokes manual
+and scheduled acquisition. The stable node may remain visible with cached
+values marked stale; this avoids destructive IoX node deletion.
 
 ## Sensor interval commands
 

@@ -98,7 +98,7 @@ class PluginPackageTests(unittest.TestCase):
         )
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-        self.assertEqual(PLUGIN_VERSION, "0.3.15")
+        self.assertEqual(PLUGIN_VERSION, "0.3.16")
         self.assertEqual(metadata["plugin"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["version"], PLUGIN_VERSION)
         self.assertEqual(project["project"]["dependencies"], ["udi_interface==3.4.9"])

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eisy-onewire"
-version = "0.3.15"
+version = "0.3.16"
 description = "Generic 1-Wire controller with DS18B20 and identified HIH-4000 support"
 readme = "README.md"
 requires-python = ">=3.11"

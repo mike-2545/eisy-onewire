@@ -353,6 +353,14 @@ class Ds18b20NodeTests(unittest.TestCase):
         self.assertIn('"event_flags_cleared": false', notice)
         self.assertIn('"restoration_verified": true', notice)
 
+        node.set_branch_target(
+            PATH, target, event_clear_allowed=True, error=None
+        )
+        self.assertEqual(
+            node.getDriver(AVAILABILITY_DRIVER), 1,
+            "idempotent configuration reconciliation must preserve validity",
+        )
+
     def test_presentation_change_reuses_raw_cache_without_usb_and_preserves_validity(self) -> None:
         service = FakeService(measurement(fahrenheit=75.425))
         saved = []

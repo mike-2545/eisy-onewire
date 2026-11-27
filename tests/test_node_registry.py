@@ -24,6 +24,8 @@ from eisy_onewire.node_registry import (
     CONFIG_NOTICE_KEY,
     DISCOVERY_NOTICE_KEY,
     DS2409_STATUS_NOTICE_KEY,
+    DS2438_APPLICATION_NOTICE_KEY,
+    FRIENDLY_NAME_NOTICE_KEY,
     OneWireNodeRegistry,
     TEMPERATURE_PRESENTATION_NOTICE_KEY,
 )
@@ -65,11 +67,13 @@ class FakeInterface:
         self.Notices = Notices()
         self.added: list[tuple[object, bool]] = []
         self.database_names = dict(database_names or {})
+        self.database_name_lookups = 0
 
     def addNode(self, node: object, rename: bool = False) -> None:
         self.added.append((node, rename))
 
     def getNodeNameFromDb(self, address: str):
+        self.database_name_lookups += 1
         return self.database_names.get(address)
 
 
@@ -171,6 +175,10 @@ class Sensor:
 
     def set_temperature_presentation(self, presentation) -> None:
         self.temperature_presentation = presentation
+
+    def rename(self, name) -> None:
+        self.renames = getattr(self, "renames", []) + [name]
+        self.name = name
 
     def refresh_temperature(self) -> bool:
         self.scheduled_refresh_calls = getattr(self, "scheduled_refresh_calls", 0) + 1
@@ -537,8 +545,9 @@ class NodeRegistryTests(unittest.TestCase):
         self.assertIn("Restart eisy-onewire", notice["recovery"])
 
     def test_repeated_configuration_is_idempotent_and_name_edit_keeps_address(self) -> None:
-        registry, interface, _, _, _, _ = self.make_registry()
+        registry, interface, _, _, _, _ = self.make_registry(report(SENSOR_A))
         self.ready(registry)
+        self.assertTrue(registry.discover_devices())
         registry.handle_custom_parameters(DEFAULTS)
         registry.handle_custom_parameters(DEFAULTS)
         self.assertEqual(
@@ -551,16 +560,140 @@ class NodeRegistryTests(unittest.TestCase):
         children = [
             node for node, _ in interface.added if node.address == "28112233445566"
         ]
-        self.assertEqual([node.name for node in children], ["Test Sensor", "Garden"])
+        self.assertEqual([node.name for node in children], ["Garden"])
+        self.assertEqual(children[0].renames, ["Garden"])
         self.assertEqual({node.address for node in children}, {"28112233445566"})
 
-    def test_invalid_update_registers_no_partial_children(self) -> None:
+    def test_invalid_optional_name_does_not_disable_valid_configuration(self) -> None:
         registry, interface, _, _, _, _ = self.make_registry()
         registry.handle_custom_data({})
         registry.activate(adapter_accessible=False)
         registry.handle_custom_parameters({"_config_version": "1", "bad": "Broken"})
         self.assertEqual([node.address for node, _ in interface.added], ["onewire"])
-        self.assertIn(CONFIG_NOTICE_KEY, interface.Notices)
+        self.assertNotIn(CONFIG_NOTICE_KEY, interface.Notices)
+        notice = json.loads(interface.Notices[FRIENDLY_NAME_NOTICE_KEY])
+        self.assertFalse(notice["scheduler_affected"])
+        self.assertFalse(notice["usb_activity"])
+
+        registry.handle_custom_parameters({"_config_version": "1"})
+        self.assertNotIn(FRIENDLY_NAME_NOTICE_KEY, interface.Notices)
+
+    def test_stale_database_name_never_reverses_external_ds18b20_rename(self) -> None:
+        registry, interface, _, data, factory, _ = self.make_registry(
+            report(SENSOR_A), database_names={"28112233445566": "Test Sensor"}
+        )
+        self.ready(registry)
+        self.assertTrue(registry.discover_devices())
+        node = next(
+            node for node, _ in interface.added if node.address == "28112233445566"
+        )
+
+        # IoX accepted an external rename, but PG3's database lookup remains
+        # stale. Repeated configuration callbacks must be noninterfering.
+        registry.handle_custom_parameters(DEFAULTS)
+        registry.handle_custom_parameters(DEFAULTS)
+        self.assertFalse(hasattr(node, "renames"))
+        self.assertEqual(interface.database_name_lookups, 0)
+        self.assertEqual(factory.calls, 1)
+        self.assertEqual(node.address, "28112233445566")
+        self.assertEqual(node.refresh_interval_seconds, 0)
+        self.assertEqual(node.drivers, [{"driver": "GV0", "value": 0, "uom": 2}])
+
+        registry.handle_custom_parameters(
+            {"_config_version": "1", SENSOR_A.hex().upper(): "Garden Bin"}
+        )
+        self.assertEqual(node.renames, ["Garden Bin"])
+        registry.handle_custom_parameters(
+            {"_config_version": "1", SENSOR_A.hex().upper(): "Garden Bin"}
+        )
+        self.assertEqual(node.renames, ["Garden Bin"])
+
+        # Removing the compatibility override leaves the IoX-owned name alone.
+        registry.handle_custom_parameters({"_config_version": "1"})
+        self.assertEqual(node.renames, ["Garden Bin"])
+        row = data.values[REFRESH_CONFIGURATION_KEY]["sensors"][0]
+        self.assertIsNone(row["legacy_name_override"])
+        self.assertEqual(row["effective_name"], "Garden Bin")
+
+    def test_stale_database_name_never_reverses_external_ds2438_rename(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        path = (BranchHop(COUPLER, Ds2409Branch.MAIN),)
+        topology = TopologyDiscoveryReport(
+            adapter_rom=ADAPTER_ID,
+            devices=(
+                LocatedDevice(OneWireDevice(ADAPTER_ID), ADAPTER_ID),
+                LocatedDevice(OneWireDevice(COUPLER), ADAPTER_ID),
+                LocatedDevice(OneWireDevice(ds2438), ADAPTER_ID, path),
+            ),
+            scanned_branches=(path,),
+            branches_not_scanned=(),
+        )
+        parameters = {
+            "_config_version": "1",
+            ds2438.hex().upper(): "Humidity Legacy Test",
+            "_ds2438_application_2666778899AABB54": "hih4000",
+        }
+        registry, interface, _, data, factory, _ = self.make_registry(
+            topology,
+            database_names={"2666778899aabb": "Humidity Legacy Test"},
+            ds2438_sensor_class=Sensor,
+        )
+        registry.handle_custom_parameters(parameters)
+        registry.handle_custom_data({})
+        registry.activate(adapter_accessible=True)
+        self.assertTrue(registry.discover_devices())
+        node = next(
+            node for node, _ in interface.added if node.address == "2666778899aabb"
+        )
+
+        # Exact live sequence: external IoX rename, stale PG3 name, then two
+        # configuration saves. No default or legacy name may be restored.
+        registry.handle_custom_parameters(parameters)
+        registry.handle_custom_parameters(parameters)
+        self.assertFalse(hasattr(node, "renames"))
+        self.assertEqual(interface.database_name_lookups, 0)
+        self.assertEqual(factory.calls, 1)
+        self.assertEqual(node.branch_path, path)
+        self.assertEqual(node.primary, "onewire")
+        self.assertEqual(node.refresh_interval_seconds, 0)
+        self.assertEqual(node.drivers, [{"driver": "GV0", "value": 0, "uom": 2}])
+
+        restarted, restarted_interface, _, _, restarted_factory, _ = self.make_registry(
+            RuntimeError("restart must not discover"),
+            persisted=data.values,
+            database_names={"2666778899aabb": "Humidity Legacy Test"},
+            ds2438_sensor_class=Sensor,
+        )
+        restarted.handle_custom_parameters(parameters)
+        restarted.handle_custom_data(data.values)
+        restarted.activate(adapter_accessible=True)
+        restarted_node, restarted_rename = next(
+            (item, rename)
+            for item, rename in restarted_interface.added
+            if item.address == "2666778899aabb"
+        )
+        self.assertFalse(restarted_rename)
+        self.assertEqual(restarted_node.primary, "onewire")
+        self.assertEqual(restarted_node.refresh_interval_seconds, 0)
+        self.assertEqual(restarted_factory.calls, 0)
+
+        changed = dict(parameters)
+        changed[ds2438.hex().upper()] = "Humidity Deliberate Override"
+        registry.handle_custom_parameters(changed)
+        self.assertEqual(node.renames, ["Humidity Deliberate Override"])
+        registry.handle_custom_parameters(changed)
+        self.assertEqual(node.renames, ["Humidity Deliberate Override"])
+
+        del changed[ds2438.hex().upper()]
+        registry.handle_custom_parameters(changed)
+        self.assertEqual(node.renames, ["Humidity Deliberate Override"])
+        row = next(
+            item
+            for item in data.values[REFRESH_CONFIGURATION_KEY]["sensors"]
+            if item["rom"] == ds2438.hex().upper()
+        )
+        self.assertIsNone(row["legacy_name_override"])
+        self.assertEqual(row["effective_name"], "Humidity Deliberate Override")
 
     def test_mixed_five_rom_scan_adds_three_sensors_and_inventories_other_families(self) -> None:
         registry, interface, _, data, factory, _ = self.make_registry(
@@ -792,7 +925,7 @@ class NodeRegistryTests(unittest.TestCase):
         self.assertEqual(notice["status"], "empty_bus")
         self.assertEqual(notice["reachable_roms_at_last_scan"], [])
 
-    def test_name_collision_with_discovered_default_fails_before_persisting(self) -> None:
+    def test_name_collision_with_discovered_default_uses_safe_default(self) -> None:
         registry, interface, _, data, _, _ = self.make_registry(report(SENSOR_TWO))
         registry.handle_custom_parameters(
             {
@@ -803,15 +936,13 @@ class NodeRegistryTests(unittest.TestCase):
         registry.handle_custom_data({})
         registry.activate(adapter_accessible=True)
 
-        self.assertFalse(registry.discover_devices())
+        self.assertTrue(registry.discover_devices())
 
-        self.assertEqual(data.saved, 1)
-        self.assertNotIn(
+        self.assertGreaterEqual(data.saved, 2)
+        self.assertIn(
             "28223344556677", [node.address for node, _ in interface.added]
         )
-        notice = json.loads(interface.Notices[DISCOVERY_NOTICE_KEY])
-        self.assertEqual(notice["status"], "error")
-        self.assertEqual(notice["error_type"], "SensorConfigurationError")
+        self.assertIn(FRIENDLY_NAME_NOTICE_KEY, interface.Notices)
 
     def test_topology_adds_branch_ds18b20_and_inventories_ds2438_only(self) -> None:
         branch_sensor = bytes.fromhex("28778899AABBCC50")
@@ -921,6 +1052,101 @@ class NodeRegistryTests(unittest.TestCase):
         scheduled = registry.test_scheduler_factory.configurations[-1]["targets"]
         target = next(item for item in scheduled if item.rom == ds2438)
         self.assertFalse(target.automatic_eligible)
+
+    def test_discovered_ds2438_populates_unassigned_idempotently(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        path = (BranchHop(COUPLER, Ds2409Branch.MAIN),)
+        topology = TopologyDiscoveryReport(
+            adapter_rom=ADAPTER_ID,
+            devices=(
+                LocatedDevice(OneWireDevice(ADAPTER_ID), ADAPTER_ID),
+                LocatedDevice(OneWireDevice(COUPLER), ADAPTER_ID),
+                LocatedDevice(OneWireDevice(ds2438), ADAPTER_ID, path),
+            ),
+            scanned_branches=(path, (BranchHop(COUPLER, Ds2409Branch.AUX),)),
+            branches_not_scanned=(),
+        )
+        registry, interface, params, data, _, _ = self.make_registry(
+            topology, ds2438_sensor_class=Sensor
+        )
+        self.ready(registry)
+        self.assertTrue(registry.discover_devices())
+
+        key = "_ds2438_application_2666778899AABB54"
+        self.assertEqual(params.values[key], "unassigned")
+        self.assertNotIn("2666778899aabb", [n.address for n, _ in interface.added])
+        saves = params.saved
+        registry.handle_custom_data(data.values)
+        self.assertEqual(params.saved, saves)
+
+        restarted, _, restarted_params, _, restarted_factory, _ = self.make_registry(
+            persisted=data.values, ds2438_sensor_class=Sensor
+        )
+        restarted.handle_custom_parameters({})
+        restarted.handle_custom_data(data.values)
+        restarted.activate(adapter_accessible=True)
+        self.assertEqual(restarted_params.values[key], "unassigned")
+        self.assertEqual(restarted_factory.calls, 0)
+
+    def test_application_parameter_write_failure_remains_inventory_only(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        topology = TopologyDiscoveryReport(
+            adapter_rom=ADAPTER_ID,
+            devices=(LocatedDevice(OneWireDevice(ds2438), ADAPTER_ID),),
+            scanned_branches=(),
+            branches_not_scanned=(),
+        )
+        registry, interface, params, _, _, _ = self.make_registry(
+            topology, ds2438_sensor_class=Sensor
+        )
+        self.ready(registry)
+        params.fail_next_set = True
+
+        self.assertTrue(registry.discover_devices())
+
+        self.assertIn(DS2438_APPLICATION_NOTICE_KEY, interface.Notices)
+        self.assertNotIn(
+            "2666778899aabb", [node.address for node, _ in interface.added]
+        )
+
+    def test_family_26_name_override_is_cosmetic_and_scheduler_safe(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        registry, interface, _, _, _, _ = self.make_registry(
+            ds2438_sensor_class=Sensor
+        )
+        registry.handle_custom_parameters(
+            {
+                "_config_version": "1",
+                ds2438.hex().upper(): "Humidity Sensor",
+                "_ds2438_application_2666778899AABB54": "hih4000",
+            }
+        )
+        registry.handle_custom_data({})
+        registry.activate(adapter_accessible=True)
+
+        self.assertNotIn(CONFIG_NOTICE_KEY, interface.Notices)
+        self.assertNotIn(FRIENDLY_NAME_NOTICE_KEY, interface.Notices)
+        self.assertTrue(
+            registry.test_scheduler_factory.configurations[-1]["configuration_valid"]
+        )
+
+    def test_invalid_family_26_name_preserves_ds18b20_scheduler_target(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        registry, interface, _, _, _, _ = self.make_registry(report(SENSOR_A))
+        self.ready(registry)
+        self.assertTrue(registry.discover_devices())
+        self.assertTrue(registry.set_refresh_interval(SENSOR_A, 60))
+
+        registry.handle_custom_parameters(
+            {"_config_version": "1", ds2438.hex().upper(): "   "}
+        )
+
+        latest = registry.test_scheduler_factory.configurations[-1]
+        self.assertTrue(latest["configuration_valid"])
+        target = next(item for item in latest["targets"] if item.rom == SENSOR_A)
+        self.assertEqual(target.interval_seconds, 60)
+        notice = json.loads(interface.Notices[FRIENDLY_NAME_NOTICE_KEY])
+        self.assertFalse(notice["scheduler_affected"])
 
     def test_valid_customdata_atomically_replaces_startup_invalid_evidence(self) -> None:
         ds2438 = bytes.fromhex("2666778899AABB54")
@@ -1189,7 +1415,11 @@ class NodeRegistryTests(unittest.TestCase):
             if node.address == "28223344556677"
         )
         restored_controller = restarted_interface.added[0][0]
-        self.assertEqual(restored_sensor.name, "Lab Bench")
+        self.assertEqual(
+            restored_sensor.name,
+            "DS18B20 28.223344556677",
+            "a stale PG3 database name must not become plugin rename intent",
+        )
         self.assertEqual(restored_sensor.refresh_interval_seconds, 60)
         self.assertTrue(restored_controller.automatic_refresh_enabled)
         self.assertEqual(restarted_factory.calls, 0)
@@ -1207,8 +1437,10 @@ class NodeRegistryTests(unittest.TestCase):
             for node, rename in restarted_interface.added
             if node.address == "28112233445566"
         ]
-        self.assertEqual(sensor_a_nodes[-1][0].name, "Test Sensor West")
-        self.assertTrue(sensor_a_nodes[-1][1])
+        self.assertEqual(len(sensor_a_nodes), 1)
+        self.assertEqual(sensor_a_nodes[0][0].name, "Test Sensor West")
+        self.assertEqual(sensor_a_nodes[0][0].renames, ["Test Sensor West"])
+        self.assertFalse(sensor_a_nodes[0][1])
 
     def test_malformed_refresh_settings_do_not_clear_inventory_or_nodes(self) -> None:
         first, _, _, data, _, _ = self.make_registry(report(SENSOR_A, SENSOR_TWO))

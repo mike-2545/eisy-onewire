@@ -29,6 +29,8 @@ should start with the [README](../README.md) and [user guide](user-guide.md).
   serialized profile-update worker.
 - **0.3.15:** explicitly identified DS2438/Honeywell HIH-4000 IoX integration,
   manual live acceptance, cached/stale state, and scheduler integration.
+- **0.3.16:** optional-name error isolation, standard IoX rename precedence,
+  and safe automatic DS2438 application selectors.
 
 ## Engineering records
 

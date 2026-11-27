@@ -42,6 +42,7 @@ class Ds2409UnattendedBranchPolicy(str, Enum):
 class Ds2438Application(str, Enum):
     """Explicitly identified analog application attached to one DS2438."""
 
+    UNASSIGNED = "unassigned"
     HIH4000 = "hih4000"
 
 
@@ -57,6 +58,15 @@ class ConfiguredDs2438:
     rom: bytes
     address: str
     application: Ds2438Application
+
+
+@dataclass(frozen=True, slots=True)
+class FriendlyNameOverride:
+    """Optional, cosmetic name associated with one supported sensor ROM."""
+
+    rom: bytes
+    address: str
+    name: str
 
 
 def load_default_parameters(path: Path) -> dict[str, str]:
@@ -80,7 +90,11 @@ def parse_sensor_parameters(
     *,
     adapter_namespace: str = DEFAULT_ADAPTER_NAMESPACE,
 ) -> tuple[ConfiguredDs18b20, ...]:
-    """Validate all ROM/name pairs atomically and return stable child identities."""
+    """Strict compatibility parser for family-0x28 name overrides.
+
+    Runtime reconciliation uses :func:`parse_friendly_name_overrides` so one
+    malformed cosmetic entry cannot disable otherwise safe configuration.
+    """
 
     version = parameters.get(CONFIG_VERSION_KEY)
     if version != CONFIG_VERSION:
@@ -91,48 +105,88 @@ def parse_sensor_parameters(
     parse_ds2409_branch_read_event_flag_policy(parameters)
     parse_ds2409_unattended_branch_policy(parameters)
 
+    overrides, errors = parse_friendly_name_overrides(
+        parameters, adapter_namespace=adapter_namespace
+    )
+    if errors:
+        raise SensorConfigurationError("; ".join(errors))
     configured: list[ConfiguredDs18b20] = []
-    addresses: set[str] = set()
-    names: set[str] = set()
+    for item in overrides:
+        if item.rom[0] == 0x28:
+            configured.append(ConfiguredDs18b20(item.rom, item.address, item.name))
+    return tuple(configured)
+
+
+def parse_friendly_name_overrides(
+    parameters: Mapping[str, object],
+    *,
+    adapter_namespace: str = DEFAULT_ADAPTER_NAMESPACE,
+    previous: Mapping[bytes, FriendlyNameOverride] | None = None,
+) -> tuple[tuple[FriendlyNameOverride, ...], tuple[str, ...]]:
+    """Parse optional names independently, preserving a prior valid value.
+
+    Only non-underscore keys are naming overrides.  Errors are returned per
+    entry; safety-critical parameters are deliberately outside this parser.
+    """
+
+    retained = dict(previous or {})
+    configured: dict[bytes, FriendlyNameOverride] = {}
+    errors: list[str] = []
+    names: dict[str, bytes] = {}
     for rom_text, configured_name in parameters.items():
         if not isinstance(rom_text, str):
-            raise SensorConfigurationError("sensor ROM keys must be strings")
-        if rom_text in (
-            CONFIG_VERSION_KEY,
-            DS2409_EVENT_POLICY_KEY,
-            DS2409_BRANCH_READ_EVENT_POLICY_KEY,
-            DS2409_UNATTENDED_BRANCH_POLICY_KEY,
-        ) or rom_text.startswith(DS2438_APPLICATION_PREFIX):
+            errors.append("friendly-name ROM keys must be strings")
+            continue
+        if rom_text.startswith("_"):
             continue
         try:
-            rom = parse_ds18b20_rom(rom_text)
-        except InvalidRomError as exc:
-            raise SensorConfigurationError(f"invalid sensor ROM {rom_text!r}: {exc}") from exc
+            raw_rom = bytes.fromhex(rom_text)
+            family = raw_rom[0]
+            if family == 0x28:
+                rom = parse_ds18b20_rom(rom_text)
+            elif family == 0x26:
+                rom = parse_ds2438_rom(rom_text)
+            else:
+                raise ValueError(f"unsupported family 0x{family:02X}")
+        except (InvalidRomError, TypeError, ValueError, IndexError) as exc:
+            errors.append(f"invalid optional friendly-name ROM {rom_text!r}: {exc}")
+            continue
         if not isinstance(configured_name, str):
-            raise SensorConfigurationError(
-                f"friendly name for {rom_text.upper()} must be text"
-            )
+            errors.append(f"friendly name for {rom_text.upper()} must be text")
+            if rom in retained:
+                configured[rom] = retained[rom]
+            continue
         name = configured_name.strip()
         if not name:
-            raise SensorConfigurationError(
-                f"friendly name for {rom_text.upper()} must not be empty"
-            )
+            errors.append(f"friendly name for {rom_text.upper()} must not be empty")
+            if rom in retained:
+                configured[rom] = retained[rom]
+            continue
         if len(name) > MAX_FRIENDLY_NAME_LENGTH:
-            raise SensorConfigurationError(
+            errors.append(
                 f"friendly name for {rom_text.upper()} exceeds "
                 f"{MAX_FRIENDLY_NAME_LENGTH} characters"
             )
+            if rom in retained:
+                configured[rom] = retained[rom]
+            continue
         folded = name.casefold()
         if folded in names:
-            raise SensorConfigurationError(f"duplicate friendly name {name!r}")
-        names.add(folded)
+            errors.append(
+                f"duplicate optional friendly name {name!r} for "
+                f"{rom_text.upper()} and {names[folded].hex().upper()}"
+            )
+            if rom in retained:
+                configured[rom] = retained[rom]
+            continue
+        names[folded] = rom
         address = sensor_address(rom, adapter_namespace)
-        if address in addresses:
-            raise SensorConfigurationError(f"duplicate sensor address {address}")
-        addresses.add(address)
-        configured.append(ConfiguredDs18b20(rom, address, name))
+        configured[rom] = FriendlyNameOverride(rom, address, name)
 
-    return tuple(sorted(configured, key=lambda item: item.address))
+    return (
+        tuple(sorted(configured.values(), key=lambda item: item.address)),
+        tuple(errors),
+    )
 
 
 def parse_ds2438_applications(
@@ -142,9 +196,9 @@ def parse_ds2438_applications(
 ) -> tuple[ConfiguredDs2438, ...]:
     """Parse explicit per-ROM DS2438 application declarations.
 
-    A discovered family-0x26 device remains inventory-only unless the operator
-    adds ``_ds2438_application_<full ROM> = hih4000``.  The model token is
-    deliberately narrow: there is no inference from family code or voltage.
+    A discovered family-0x26 device remains inventory-only while its generated
+    declaration is ``unassigned``.  ``hih4000`` is always an explicit operator
+    selection; there is no inference from family code or voltage.
     """
 
     configured: list[ConfiguredDs2438] = []
@@ -167,7 +221,8 @@ def parse_ds2438_applications(
             application = Ds2438Application(value.strip().lower())
         except ValueError as exc:
             raise SensorConfigurationError(
-                f"DS2438 application for {rom_text.upper()} must be hih4000"
+                f"DS2438 application for {rom_text.upper()} must be one of: "
+                "unassigned, hih4000"
             ) from exc
         if rom in seen:
             raise SensorConfigurationError(

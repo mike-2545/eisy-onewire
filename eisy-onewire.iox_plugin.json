@@ -25,7 +25,7 @@
       "udi_interface==3.4.9"
     ],
     "nodesAreStatic": false,
-    "version": "0.3.15"
+    "version": "0.3.16"
   },
   "editors": [
     {

@@ -125,32 +125,38 @@ class RefreshConfigurationTests(unittest.TestCase):
                 with self.assertRaises(RefreshConfigurationError):
                     RefreshConfiguration.from_data(raw, inventory())
 
-    def test_rename_precedence_preserves_legacy_edits_and_iox_restart_names(self) -> None:
+    def test_legacy_override_state_never_infers_external_rename(self) -> None:
         first = resolved_sensor_configuration(
             SENSOR_A,
             legacy_name_override="Test Sensor",
-            database_name="Test Sensor",
             default_name="DS18B20 28.112233445566",
             previous=None,
         )
-        renamed = resolved_sensor_configuration(
+        unchanged = resolved_sensor_configuration(
             SENSOR_A,
             legacy_name_override="Test Sensor",
-            database_name="Garden Bin",
             default_name="ignored",
             previous=first,
         )
-        self.assertEqual(renamed.effective_name, "Garden Bin")
+        self.assertEqual(unchanged, first)
 
         legacy_changed = resolved_sensor_configuration(
             SENSOR_A,
             legacy_name_override="Test Sensor West",
-            database_name="Garden Bin",
             default_name="ignored",
-            previous=renamed,
+            previous=first,
         )
         self.assertEqual(legacy_changed.effective_name, "Test Sensor West")
         self.assertEqual(legacy_changed.interval_seconds, 0)
+
+        migrated = resolved_sensor_configuration(
+            SENSOR_A,
+            legacy_name_override=None,
+            default_name="DS18B20 28.112233445566",
+            previous=legacy_changed,
+        )
+        self.assertEqual(migrated.effective_name, "Test Sensor West")
+        self.assertIsNone(migrated.legacy_name_override)
 
 
 if __name__ == "__main__":

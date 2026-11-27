@@ -4,7 +4,7 @@
 the DS9490R USB adapter directly through FreeBSD libusb, so a separate
 Raspberry Pi, OWFS server, or network bridge is not required.
 
-Version **0.3.15** is a **public beta**. It has been exercised on a personal
+Version **0.3.16** is a **beta release candidate**. Version 0.3.15 was exercised on a personal
 eisy with a DS9490R, DS18B20 temperature sensors, a DS2409 coupler, and one
 explicitly identified DS2438/Honeywell HIH-4000 humidity application. Review
 the [known limitations](#known-limitations) before enabling branch access or
@@ -73,8 +73,12 @@ before changing any policy.
 
 Rename a discovered node with the standard IoX node rename control. The stable
 node address is derived from the ROM and does not change. Optional ROM-keyed
-name overrides remain available for compatibility; users normally do not need
-to type a ROM address.
+name overrides for families `0x28` and `0x26` remain available for
+compatibility; users normally do not need to type a ROM address. After initial
+registration the displayed name is user-owned: ordinary reconciliation uses
+`rename=False` and does not replace an external IoX rename. A newly added or
+changed legacy override is an explicit one-time rename request; removing it
+leaves the current IoX name untouched.
 
 ### Refresh a sensor
 
@@ -104,8 +108,9 @@ profile and numeric driver precision are correct.
 ### DS2438 and HIH-4000 humidity
 
 Family `0x26` devices remain inventory-only by default because a DS2438 does
-not identify the analog sensor attached to it. After physically confirming a
-Honeywell HIH-4000-series application, add this plugin parameter:
+not identify the analog sensor attached to it. Discovery automatically adds a
+safe selector with value `unassigned`. After physically confirming a Honeywell
+HIH-4000-series application, change that selector to `hih4000`:
 
 ```text
 _ds2438_application_<16-character-ROM>=hih4000

@@ -136,6 +136,18 @@ class Ds2438NodeTests(unittest.TestCase):
         self.assertEqual(accepted, [120])
         self.assertEqual(service.calls, [])
 
+    def test_unassigned_application_blocks_manual_access_without_usb(self):
+        service = Service(AssertionError("USB must not be called"))
+        node, _, _ = self.make_node(service, cached_reading=reading())
+
+        node.set_application_authorized(False)
+
+        self.assertFalse(node.refresh_measurements())
+        self.assertEqual(service.calls, [])
+        values = {row["driver"]: row for row in node.drivers}
+        self.assertEqual(values["GV0"]["value"], 0)
+        self.assertEqual(values["ST"]["value"], 75.0)
+
 
 if __name__ == "__main__":
     unittest.main()

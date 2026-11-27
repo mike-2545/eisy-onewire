@@ -16,6 +16,7 @@ from eisy_onewire.sensor_config import (
     parse_ds2409_branch_read_event_flag_policy,
     parse_ds2409_unattended_branch_policy,
     parse_ds2438_applications,
+    parse_friendly_name_overrides,
     parse_sensor_parameters,
 )
 
@@ -38,6 +39,29 @@ class SensorConfigTests(unittest.TestCase):
                 parse_ds2438_applications(
                     {"_ds2438_application_2666778899AABB54": value}
                 )
+
+        unassigned = parse_ds2438_applications(
+            {"_ds2438_application_2666778899AABB54": "unassigned"}
+        )
+        self.assertEqual(unassigned[0].application.value, "unassigned")
+
+    def test_optional_names_accept_both_supported_families_and_isolate_errors(self) -> None:
+        ds2438 = bytes.fromhex("2666778899AABB54")
+        previous, errors = parse_friendly_name_overrides(
+            {
+                SENSOR_A_ROM.hex().upper(): "Probe A",
+                ds2438.hex().upper(): "Humidity",
+            }
+        )
+        self.assertEqual(errors, ())
+        self.assertEqual({item.rom for item in previous}, {SENSOR_A_ROM, ds2438})
+
+        retained, errors = parse_friendly_name_overrides(
+            {ds2438.hex().upper(): "   ", "bad": "ignored"},
+            previous={item.rom: item for item in previous},
+        )
+        self.assertEqual({item.rom: item.name for item in retained}, {ds2438: "Humidity"})
+        self.assertEqual(len(errors), 2)
 
     def test_packaged_defaults_are_safe_and_contain_no_personal_sensor(self) -> None:
         defaults = load_default_parameters(ROOT / "default-sensors.json")

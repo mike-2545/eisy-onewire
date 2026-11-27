@@ -92,6 +92,7 @@ def create_ds2438_node_class(
             self._set_refresh_interval = set_refresh_interval
             self._temperature_presentation = temperature_presentation
             self._record_measurement = record_measurement
+            self._application_authorized = True
             self._cached_reading = cached_reading
             self._last_refresh_error: str | None = None
             self._notice_key = f"ds2438_{address}"
@@ -122,6 +123,11 @@ def create_ds2438_node_class(
             )
 
         def _refresh(self, *, branch_event_clear_allowed: bool) -> bool:
+            if not self._application_authorized:
+                return self._fail(
+                    "ApplicationUnassigned",
+                    "DS2438 application is unassigned; hardware acquisition is disabled",
+                )
             if not self._adapter_lock.acquire(blocking=False):
                 return self._fail("AdapterBusyError", "adapter is busy")
             try:
@@ -221,11 +227,33 @@ def create_ds2438_node_class(
             event_clear_allowed: bool,
             error: str | None,
         ) -> None:
-            self._branch_path = _branch_path(branch_path)
+            validated_path = _branch_path(branch_path)
+            changed = (
+                validated_path != self._branch_path
+                or target != self._branch_target
+                or event_clear_allowed != self._branch_event_clear_allowed
+                or error != self._branch_refresh_error
+            )
+            self._branch_path = validated_path
             self._branch_target = target
             self._branch_event_clear_allowed = event_clear_allowed
             self._branch_refresh_error = error
-            if self._branch_path:
+            if changed and self._branch_path:
+                self.setDriver(
+                    AVAILABILITY_DRIVER, 0,
+                    report=self._cached_reading is not None,
+                    force=True, uom=UOM_BOOLEAN,
+                )
+
+        def set_application_authorized(self, authorized: bool) -> None:
+            """Apply the explicit application selector without touching USB."""
+
+            if not isinstance(authorized, bool):
+                raise TypeError("application authorization must be Boolean")
+            if authorized == self._application_authorized:
+                return
+            self._application_authorized = authorized
+            if not authorized:
                 self.setDriver(
                     AVAILABILITY_DRIVER, 0,
                     report=self._cached_reading is not None,

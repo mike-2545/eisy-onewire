@@ -33,15 +33,22 @@ irreversible event-latch clear.
 
 ## Friendly names
 
-Use the standard IoX rename action on a discovered sensor. The plugin reconciles
-the persisted name after restart. A ROM-keyed plugin parameter remains an
-optional compatibility override:
+Use the standard IoX rename action on a discovered sensor. Once registered, the
+displayed name is owned by IoX and the operator. The plugin uses
+`addNode(..., rename=False)` during ordinary reconciliation and restart, so it
+does not need to observe the current name in order to preserve it. A ROM-keyed
+plugin parameter remains an optional compatibility override:
 
 ```text
 <complete-16-character-ROM>=Friendly Name
 ```
 
 Do not omit the CRC byte or use an OWFS identifier with punctuation.
+Both supported sensor families (`0x28` and `0x26`) accept legacy overrides.
+Standard IoX Rename is preferred. Adding or changing a valid legacy override
+is an explicit request for the plugin to rename that node once. Leaving the
+override unchanged does not rename it again, and removing it leaves the current
+IoX name untouched. The stable node address never changes.
 
 ## Manual refresh
 
@@ -64,8 +71,12 @@ targets, uses monotonic deadlines, and performs no discovery. Failed reads set
 GV0 false and retain the last valid ST/GV2 as stale.
 
 Branch sensors also require `_ds2409_unattended_branch_access_policy`. This is
-independent of both manual policies. Root-bus DS18B20 scheduling was live-tested.
-Unattended DS2438 branch measurement is not claimed as live-verified in 0.3.15.
+independent of both manual policies. Controlled v0.3.16 acceptance exercised
+repeated, serialized root-bus DS18B20, one-level DS2409 branch DS18B20, and
+DS2438/HIH-4000 scheduled measurements. Every sensor remained current and the
+available PG3 event evidence showed no retry or restoration failure. Other
+coupler paths and physical networks remain automated-test-only until validated
+by their operator.
 
 ## Temperature presentation
 
@@ -92,10 +103,11 @@ values from a current measurement. Never treat GV0=false as live data.
 ## DS2438/HIH-4000 configuration
 
 A DS2438 measures temperature and voltages; it does not identify the external
-analog humidity element. A discovered family-`0x26` device therefore remains
-inventory-only until its circuit is physically identified.
+analog humidity element. Discovery or restored inventory therefore creates an
+application parameter set to `unassigned`; the device remains inventory-only
+and performs no measurement until its circuit is physically identified.
 
-For a Honeywell HIH-4000-series application, add:
+For a Honeywell HIH-4000-series application, change the generated selector:
 
 ```text
 _ds2438_application_<complete-CRC-valid-ROM>=hih4000
@@ -107,10 +119,17 @@ invalid/nonfinite voltages or results. It does not write DS2438 EEPROM.
 Nominal sensor accuracy is a hardware specification, not the same as one-decimal
 display precision.
 
-New DS2438 nodes start with interval Off. The v0.3.15 live acceptance verified
-one manual branch measurement with validated restoration. Exact VAD/VDD and
-uncompensated RH were not retained in the external acceptance evidence, and
-unattended DS2438 measurement was not live-tested.
+New DS2438 nodes start with interval Off. Controlled live acceptance verified
+both a manual branch measurement and repeated unattended measurements with
+validated restoration and no automatic retry. Exact raw VAD/VDD and
+uncompensated RH were not retained in the externally accessible acceptance
+evidence. The test covered one physically identified HIH-4000 application on a
+single-level DS2409 branch; it does not establish every wiring topology.
+
+Changing the application back to `unassigned` revokes manual and scheduled
+acquisition. An existing node is retained with its last validated values stale
+rather than being destructively removed. Selecting `hih4000` again reconciles
+the same stable address.
 
 ## Advanced DS2409 Permissions
 
