@@ -145,6 +145,10 @@ fail closed. Changing calibration marks cached irradiance stale and performs no
 measurement. Application changes that would replace an existing IoX node
 definition are blocked rather than deleting the node or breaking programs.
 
+See the [DS2438 analog interface guide](ds2438-analog-interface.md) for the
+manufacturer pinout and electrical limits, signal-conditioning guidance, and
+the difference between live-tested applications and conceptual examples.
+
 ## Advanced DS2409 Permissions
 
 These settings are for knowledgeable operators and intentionally remain plugin

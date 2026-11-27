@@ -11,7 +11,8 @@ and unsupported/untested categories.
 | Externally powered DS18B20-compatible sensors (family `0x28`) | Multiple-device discovery, manual temperature, root scheduling, CRC, cached/stale behavior, and presentation tested. |
 | DS2409 MicroLAN coupler (family `0x1F`) | One-level main-branch discovery, manual branch temperature, event evidence, restoration, and readback tested. |
 | DS2438 (family `0x26`) with physically identified Honeywell HIH-4000-series application | One manual branch temperature/humidity acquisition tested with state restoration and zero EEPROM writes. |
-| DS2438 analog environmental interface | VAD light response and VDD were characterized through OWFS; native eisy analog/solar publication awaits v0.3.17 acceptance. |
+| DS2438 generic analog-voltage application | Manual and scheduled root-bus VAD/VDD acquisition, CRC validation, persistence, and stale-state behavior tested. |
+| DS2438 linear solar-irradiance application | Manual dark/illuminated voltage response, configured linear calculation, restart persistence, and scheduled acquisition tested. Absolute irradiance calibration was not verified. |
 
 The accepted network included five CRC-valid ROMs and both root/branch devices,
 but those personal ROM values are not defaults and users need not reproduce the
@@ -31,8 +32,9 @@ same topology.
 
 Automated-test support does not mean every physical combination has been tested.
 Unattended DS2438 humidity and DS2409 branch measurements passed controlled
-v0.3.16 acceptance. Analog/solar IoX integration is automated-test-only until
-v0.3.17 hardware acceptance.
+v0.3.16 acceptance. Generic analog voltage and the provisionally calibrated
+solar path passed controlled v0.3.17 functional acceptance; the solar result
+does not establish absolute irradiance accuracy.
 
 ## Requirements and electrical assumptions
 
@@ -47,6 +49,10 @@ v0.3.17 hardware acceptance.
   readings remain useful raw evidence but may have lower accuracy.
 - One DS9490 is selected by the plugin. Multiple-adapter selection is not yet
   implemented.
+
+For the manufacturer pinout, voltage limits, accuracy qualifications, signal
+conditioning, and worked application patterns, see
+[Using the DS2438 as an analog-to-1-Wire interface](ds2438-analog-interface.md).
 
 ## Inventory-only devices
 

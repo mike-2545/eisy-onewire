@@ -4,11 +4,12 @@
 the DS9490R USB adapter directly through FreeBSD libusb, so a separate
 Raspberry Pi, OWFS server, or network bridge is not required.
 
-Version **0.3.17** is a **beta release candidate**. Version 0.3.16 was exercised on a personal
-eisy with a DS9490R, DS18B20 temperature sensors, a DS2409 coupler, and one
-explicitly identified DS2438/Honeywell HIH-4000 humidity application. Review
-the [known limitations](#known-limitations) before enabling branch access or
-automatic refresh.
+Version **0.3.17** is a **public beta**. Controlled live acceptance covered a
+DS9490R, multiple DS18B20 temperature sensors, a DS2409 coupler, an explicitly
+identified DS2438/Honeywell HIH-4000 humidity application, generic DS2438
+analog voltage, and a provisionally calibrated solar-voltage application.
+Review the [known limitations](#known-limitations) before enabling branch
+access or automatic refresh.
 
 ## What it does
 
@@ -95,10 +96,11 @@ Each sensor offers **Off**, **30**, **60**, **120**, or **300 seconds**. Set the
 sensor interval first, then use **Automatic Refresh Enable** on the controller.
 New sensors default to Off and the controller defaults to disabled.
 
-Root-bus DS18B20 polling is live-tested. Scheduled branch access and DS2438
-polling are protected by the same policy and serialization code, but unattended
-DS2438 measurement has not been live-verified. Keep it Off during beta unless
-you have reviewed the branch and event-latch implications.
+Root-bus DS18B20, scheduled branch access, and DS2438 polling have passed
+controlled live acceptance. Branch polling still requires the separate
+unattended DS2409 policy, and acknowledgment can irreversibly clear event
+latches. Keep unfamiliar sensors Off until their circuit, topology, and safety
+requirements have been reviewed.
 
 ### Temperature units and precision
 
@@ -125,6 +127,8 @@ DS2438 is a humidity sensor. Details and acceptance qualifications are in the
 Other explicit choices are `analog_voltage` and `solar_irradiance`. Solar
 selection creates ROM-specific multiplier and offset parameters. A positive
 multiplier is mandatory; there is intentionally no universal default.
+See [Using the DS2438 as an analog-to-1-Wire interface](docs/ds2438-analog-interface.md)
+for pinout, electrical limits, conditioning guidance, and application examples.
 
 ## Current and stale readings
 
@@ -156,6 +160,7 @@ stale. Cached values also return as stale after plugin restart until refreshed.
 - [Installation and rollback](docs/installation.md)
 - [User guide](docs/user-guide.md)
 - [Supported and tested hardware](docs/supported-hardware.md)
+- [DS2438 analog interface guide](docs/ds2438-analog-interface.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Configuration reference](POLYGLOT_CONFIG.md)
 - [Development history](docs/development-history.md)
